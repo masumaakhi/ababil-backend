@@ -10,7 +10,7 @@ module.exports = (db) => {
   // ─────────────────────────────────────────────────────────────────────────
   router.get('/categories', cache('categories', 3600), async (req, res) => {
     try {
-      const [rows] = await db.query('SELECT * FROM categories ORDER BY parent_id ASC, sort_order ASC, id ASC');
+      const [rows] = await db.query('SELECT * FROM categories ORDER BY parent_id ASC, CASE WHEN sort_order IS NULL OR sort_order = 0 THEN 999999 ELSE sort_order END ASC, id ASC');
       
       // Build hierarchy
       const categoryMap = {};
@@ -44,7 +44,7 @@ module.exports = (db) => {
   router.get('/home-sections', cache('home-sections', 3600), async (req, res) => {
     try {
       // 1. Fetch all root categories
-      const [categories] = await db.query('SELECT id, name_en, name_bn FROM categories WHERE parent_id IS NULL ORDER BY sort_order ASC, id ASC LIMIT 11');
+      const [categories] = await db.query('SELECT id, name_en, name_bn FROM categories WHERE parent_id IS NULL ORDER BY CASE WHEN sort_order IS NULL OR sort_order = 0 THEN 999999 ELSE sort_order END ASC, id ASC LIMIT 11');
       
       const sections = [];
       
