@@ -28,6 +28,100 @@ module.exports = (db) => {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
+  // POST /api/admin/products/categories
+  // Create a new category
+  // ─────────────────────────────────────────────────────────────────────────
+  router.post('/categories', async (req, res) => {
+    try {
+      const { name_en, name_bn, parent_id, icon, sort_order } = req.body;
+
+      if (!name_en) {
+        return res.status(400).json({ message: 'Category name (English) is required' });
+      }
+
+      // Generate slug
+      const slug = name_en.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
+
+      const parentVal = parent_id ? parseInt(parent_id) : null;
+      const sortVal = sort_order ? parseInt(sort_order) : 0;
+
+      const [result] = await db.query(
+        `INSERT INTO categories (name_en, name_bn, slug, parent_id, icon, sort_order) 
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [name_en, name_bn || null, slug, parentVal, icon || null, sortVal]
+      );
+
+      // Invalidate cache
+      try {
+        await redisClient.del('categories:/api/products/categories');
+        await redisClient.del('home-sections:/api/products/home-sections');
+      } catch (e) {}
+
+      res.status(201).json({ message: 'Category created successfully', id: result.insertId });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: 'Server error creating category' });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GET /api/admin/products/categories/:id
+  // Get single category details
+  // ─────────────────────────────────────────────────────────────────────────
+  router.get('/categories/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const [rows] = await db.query('SELECT * FROM categories WHERE id = ?', [id]);
+      if (rows.length === 0) {
+        return res.status(404).json({ message: 'Category not found' });
+      }
+      res.json(rows[0]);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: 'Server error' });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PUT /api/admin/products/categories/:id
+  // Update a category
+  // ─────────────────────────────────────────────────────────────────────────
+  router.put('/categories/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { name_en, name_bn, parent_id, icon, sort_order } = req.body;
+
+      if (!name_en) {
+        return res.status(400).json({ message: 'Category name (English) is required' });
+      }
+
+      // Generate slug
+      const slug = name_en.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
+
+      const parentVal = parent_id ? parseInt(parent_id) : null;
+      const sortVal = sort_order ? parseInt(sort_order) : 0;
+
+      await db.query(
+        `UPDATE categories 
+         SET name_en = ?, name_bn = ?, slug = ?, parent_id = ?, icon = ?, sort_order = ? 
+         WHERE id = ?`,
+        [name_en, name_bn || null, slug, parentVal, icon || null, sortVal, id]
+      );
+
+      // Invalidate cache
+      try {
+        await redisClient.del('categories:/api/products/categories');
+        await redisClient.del('home-sections:/api/products/home-sections');
+      } catch (e) {}
+
+      res.json({ message: 'Category updated successfully' });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: 'Server error updating category' });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
   // DELETE /api/admin/products/categories/:id
   // Delete a category
   // ─────────────────────────────────────────────────────────────────────────
@@ -89,7 +183,19 @@ module.exports = (db) => {
         SELECT p.*, 
                c.name_en AS category_name_en,
                b.name AS brand_name,
-               (SELECT stock FROM inventory WHERE product_id = p.id LIMIT 1) AS stock
+               (SELECT SUM(stock) FROM inventory WHERE product_id = p.id) AS stock,
+               (
+                 SELECT JSON_ARRAYAGG(
+                   JSON_OBJECT(
+                     'id', v.id,
+                     'name', v.name,
+                     'stock', COALESCE(i.stock, 0)
+                   )
+                 )
+                 FROM product_variants v
+                 LEFT JOIN inventory i ON v.id = i.variant_id
+                 WHERE v.product_id = p.id
+               ) AS variants_data
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
         LEFT JOIN brands b ON p.brand_id = b.id

@@ -48,6 +48,7 @@ try {
 const authRoutes      = require('./routes/auth');
 const productRoutes   = require('./routes/products');
 const orderRoutes     = require('./routes/orders');
+const bannerRoutes    = require('./routes/banners');
 const adminAuthRoutes = require('./routes/admin.auth');
 const adminCustomerRoutes = require('./routes/admin.customers');
 const adminProductRoutes = require('./routes/admin.products');
@@ -57,10 +58,18 @@ const adminOrderRoutes = require('./routes/admin.orders');
 const adminAffiliateRoutes = require('./routes/admin.affiliates');
 const adminManagementRoutes = require('./routes/admin.management');
 const adminRolesRoutes = require('./routes/admin.roles');
+const adminBannerRoutes = require('./routes/admin.banners');
+const flashSaleRoutes = require('./routes/flash-sale');
+const adminFlashSaleRoutes = require('./routes/admin.flash-sale');
+const adminDashboardRoutes = require('./routes/admin.dashboard');
+const adminPromosRoutes = require('./routes/admin.promos');
+const adminHomeSectionsRoutes = require('./routes/admin.home-sections');
 
 app.use('/api/auth',       authRoutes(db));
 app.use('/api/products',   productRoutes(db));
 app.use('/api/orders',     orderRoutes(db));
+app.use('/api/banners',    bannerRoutes(db));
+app.use('/api/flash-sale', flashSaleRoutes(db));
 app.use('/api/admin/auth', adminAuthRoutes(db));
 app.use('/api/admin/customers', adminCustomerRoutes(db));
 app.use('/api/admin/products', adminProductRoutes(db));
@@ -70,6 +79,12 @@ app.use('/api/admin/orders', adminOrderRoutes(db));
 app.use('/api/admin/affiliates', adminAffiliateRoutes(db));
 app.use('/api/admin/management', adminManagementRoutes(db));
 app.use('/api/admin/roles', adminRolesRoutes(db));
+app.use('/api/admin/banners', adminBannerRoutes(db));
+app.use('/api/admin/flash-sale', adminFlashSaleRoutes(db));
+app.use('/api/admin/dashboard', adminDashboardRoutes(db));
+app.use('/api/admin/promos', adminPromosRoutes(db));
+app.use('/api/admin/home-sections', adminHomeSectionsRoutes(db));
+
 
 // ── Root Endpoint ───────────────────────────────────────────────────────────
 app.get('/', (req, res) => {

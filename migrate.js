@@ -186,6 +186,94 @@ async function runMigrations() {
     `);
     console.log('  ✔ Table: orders');
 
+    // ── banners table ──────────────────────────────────────────────────────────
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS banners (
+        id          INT AUTO_INCREMENT PRIMARY KEY,
+        image       VARCHAR(255) NOT NULL,
+        title_en    VARCHAR(150) DEFAULT NULL,
+        title_bn    VARCHAR(150) DEFAULT NULL,
+        desc_en     VARCHAR(255) DEFAULT NULL,
+        desc_bn     VARCHAR(255) DEFAULT NULL,
+        badge_en    VARCHAR(100) DEFAULT NULL,
+        badge_bn    VARCHAR(100) DEFAULT NULL,
+        type        ENUM('home', 'category') DEFAULT 'home',
+        category_id INT          DEFAULT NULL,
+        created_at  TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+    console.log('  ✔ Table: banners');
+
+    // ── promo_codes table ─────────────────────────────────────────────────────
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS promo_codes (
+        id             INT AUTO_INCREMENT PRIMARY KEY,
+        code           VARCHAR(50)   NOT NULL UNIQUE,
+        discount_type  ENUM('percentage','flat') DEFAULT 'percentage',
+        discount_value DECIMAL(10,2) NOT NULL DEFAULT 0,
+        min_order      DECIMAL(10,2) DEFAULT NULL,
+        usage_limit    INT           DEFAULT NULL,
+        used_count     INT           NOT NULL DEFAULT 0,
+        start_date     DATE          DEFAULT NULL,
+        end_date       DATE          DEFAULT NULL,
+        status         ENUM('active','inactive') DEFAULT 'active',
+        created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+    console.log('  ✔ Table: promo_codes');
+
+    // ── flash_sale_settings table ─────────────────────────────────────────────
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS flash_sale_settings (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        title_en VARCHAR(150) NOT NULL,
+        title_bn VARCHAR(150) DEFAULT NULL,
+        desc_en VARCHAR(255) DEFAULT NULL,
+        desc_bn VARCHAR(255) DEFAULT NULL,
+        end_time DATETIME NOT NULL,
+        btn_text_en VARCHAR(100) DEFAULT 'View All Offers',
+        btn_text_bn VARCHAR(100) DEFAULT 'সব অফার দেখুন',
+        status ENUM('active', 'inactive') DEFAULT 'active',
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+    console.log('  ✔ Table: flash_sale_settings');
+
+    // Add columns to products table if they don't exist
+    try {
+      await db.execute('ALTER TABLE products ADD COLUMN is_flash_sale TINYINT(1) DEFAULT 0;');
+      console.log('  ✔ Added is_flash_sale column to products table');
+    } catch (e) {
+      // Column might already exist
+    }
+
+    try {
+      await db.execute('ALTER TABLE products ADD COLUMN flash_sale_stock INT DEFAULT 10;');
+      console.log('  ✔ Added flash_sale_stock column to products table');
+    } catch (e) {
+      // Column might already exist
+    }
+
+    // Insert default flash sale row if empty
+    const [existingFlash] = await db.execute('SELECT id FROM flash_sale_settings LIMIT 1');
+    if (existingFlash.length === 0) {
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const sqlTomorrow = tomorrow.toISOString().slice(0, 19).replace('T', ' ');
+      await db.execute(`
+        INSERT INTO flash_sale_settings (title_en, title_bn, desc_en, desc_bn, end_time)
+        VALUES (?, ?, ?, ?, ?)
+      `, [
+        'Flash Sale Extravaganza', 
+        'ফ্ল্যাশ সেল অফার', 
+        "Don't miss out! Premium brands at unbeatable prices.", 
+        'সীমিত সময়ের জন্য অবিশ্বাস্য মূল্যে প্রিমিয়াম ব্র্যান্ড অফার!', 
+        sqlTomorrow
+      ]);
+      console.log('  ✔ Default flash sale settings row inserted');
+    }
+
     // ── Default Super Admin (যদি না থাকে) ─────────────────────────────────────
     // Default password: Admin@1234
     const bcrypt = require('bcrypt');

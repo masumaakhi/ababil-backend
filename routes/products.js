@@ -43,35 +43,55 @@ module.exports = (db) => {
   // ─────────────────────────────────────────────────────────────────────────
   router.get('/home-sections', cache('home-sections', 3600), async (req, res) => {
     try {
-      // 1. Fetch all root categories
-      const [categories] = await db.query('SELECT id, name_en, name_bn FROM categories WHERE parent_id IS NULL ORDER BY CASE WHEN sort_order IS NULL OR sort_order = 0 THEN 999999 ELSE sort_order END ASC, id ASC LIMIT 11');
-      
+      // 1. Fetch root categories where show_on_home = 1, ordered by sort_order
+      const [categories] = await db.query(
+        `SELECT id, name_en, name_bn FROM categories
+         WHERE parent_id IS NULL AND show_on_home = 1
+         ORDER BY CASE WHEN sort_order IS NULL OR sort_order = 0 THEN 999999 ELSE sort_order END ASC, id ASC
+         LIMIT 11`
+      );
+
       const sections = [];
-      
-      // 2. For each root category, fetch its subcategory IDs
+
       for (const cat of categories) {
-        const [subCats] = await db.query('SELECT id FROM categories WHERE parent_id = ?', [cat.id]);
-        let catIds = [cat.id];
-        if (subCats.length > 0) {
-          catIds = catIds.concat(subCats.map(s => s.id));
+        // 2. Check if admin has pinned specific products for this section
+        const [pinned] = await db.query(
+          `SELECT p.*,
+                  (SELECT COALESCE(SUM(stock), 0) FROM inventory WHERE product_id = p.id) as total_stock
+           FROM home_section_products hsp
+           JOIN products p ON p.id = hsp.product_id
+           WHERE hsp.category_id = ? AND p.status = 'active'
+           ORDER BY hsp.sort_order ASC, hsp.id ASC`,
+          [cat.id]
+        );
+
+        let products;
+        if (pinned.length > 0) {
+          // Admin has curated specific products — use those
+          products = pinned;
+        } else {
+          // No pinned products — fall back to latest active products in category + subcategories
+          const [subCats] = await db.query('SELECT id FROM categories WHERE parent_id = ?', [cat.id]);
+          let catIds = [cat.id];
+          if (subCats.length > 0) catIds = catIds.concat(subCats.map(s => s.id));
+
+          const [latest] = await db.query(`
+            SELECT p.*,
+                   (SELECT COALESCE(SUM(stock), 0) FROM inventory WHERE product_id = p.id) as total_stock
+            FROM products p
+            WHERE p.status = 'active' AND p.category_id IN (?)
+            ORDER BY p.created_at DESC
+            LIMIT 10
+          `, [catIds]);
+          products = latest;
         }
 
-        // Fetch products for these categories
-        const [products] = await db.query(`
-          SELECT p.*,
-                 (SELECT COALESCE(SUM(stock), 0) FROM inventory WHERE product_id = p.id) as total_stock
-          FROM products p
-          WHERE p.status = 'active' AND p.category_id IN (?)
-          ORDER BY p.created_at DESC
-          LIMIT 10
-        `, [catIds]);
-        
         if (products.length > 0) {
-           const parsedProducts = products.map(p => ({
-             ...p,
-             images: typeof p.images === 'string' ? JSON.parse(p.images) : p.images
-           }));
-           sections.push({ category: cat, products: parsedProducts });
+          const parsedProducts = products.map(p => ({
+            ...p,
+            images: typeof p.images === 'string' ? JSON.parse(p.images) : p.images
+          }));
+          sections.push({ category: cat, products: parsedProducts });
         }
       }
 
@@ -81,6 +101,7 @@ module.exports = (db) => {
       res.status(500).json({ message: 'Server error' });
     }
   });
+
 
   // ─────────────────────────────────────────────────────────────────────────
   // GET /api/products
@@ -107,8 +128,27 @@ module.exports = (db) => {
         query += ' AND p.is_recommended = 1';
       }
       if (category_id) {
-        query += ' AND p.category_id = ?';
-        params.push(parseInt(category_id));
+        // Fetch all categories to resolve hierarchy
+        const [allCats] = await db.query('SELECT id, parent_id FROM categories');
+        
+        // Find all descendants of the target category_id
+        const targetId = parseInt(category_id);
+        const childIds = new Set([targetId]);
+        
+        let addedNew = true;
+        while (addedNew) {
+          addedNew = false;
+          for (const cat of allCats) {
+            if (cat.parent_id && childIds.has(cat.parent_id) && !childIds.has(cat.id)) {
+              childIds.add(cat.id);
+              addedNew = true;
+            }
+          }
+        }
+        
+        const idsArray = Array.from(childIds);
+        query += ` AND p.category_id IN (${idsArray.map(() => '?').join(',')})`;
+        params.push(...idsArray);
       }
 
       query += ' ORDER BY p.created_at DESC LIMIT ?';

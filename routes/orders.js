@@ -77,6 +77,31 @@ module.exports = (db) => {
         ]
       );
 
+      // ── Deduct Stock from Inventory ──
+      for (const item of items) {
+        let pId = item.id;
+        let vId = null;
+        if (typeof item.id === 'string' && item.id.includes('-')) {
+          const parts = item.id.split('-');
+          pId = parts[0];
+          vId = parts[1];
+        }
+
+        if (vId) {
+          await db.query('UPDATE inventory SET stock = GREATEST(stock - ?, 0) WHERE product_id = ? AND variant_id = ?', [item.quantity, pId, vId]);
+        } else {
+          const [res] = await db.query('UPDATE inventory SET stock = GREATEST(stock - ?, 0) WHERE product_id = ? AND variant_id IS NULL', [item.quantity, pId]);
+          if (res.affectedRows === 0) {
+             // Fallback: reduce stock from the first available variant if variant is missing
+             await db.query(`
+                UPDATE inventory 
+                SET stock = GREATEST(stock - ?, 0) 
+                WHERE id = (SELECT id FROM (SELECT id FROM inventory WHERE product_id = ? LIMIT 1) as t)
+             `, [item.quantity, pId]);
+          }
+        }
+      }
+
       res.json({
         orderId,
         autoCreated,
