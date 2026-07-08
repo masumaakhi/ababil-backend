@@ -189,6 +189,8 @@ module.exports = (db) => {
                    JSON_OBJECT(
                      'id', v.id,
                      'name', v.name,
+                     'price', v.price,
+                     'purchase_price', v.purchase_price,
                      'stock', COALESCE(i.stock, 0)
                    )
                  )
@@ -219,8 +221,8 @@ module.exports = (db) => {
 
       let {
         name_en, name_bn, category_id, brand_id, new_brand_name, new_company_name, description,
-        base_price, old_price, base_unit, status, is_featured, is_recommended,
-        variants // Expecting JSON string of variants array: [{name, price, sku, stock}]
+        base_price, old_price, purchase_price, base_unit, status, is_featured, is_recommended,
+        variants // Expecting JSON string of variants array: [{name, price, sku, stock, purchase_price}]
       } = req.body;
 
       if (!name_en || !category_id || !base_price) {
@@ -263,11 +265,11 @@ module.exports = (db) => {
       const [prodResult] = await connection.query(`
         INSERT INTO products (
           name_en, name_bn, slug, category_id, brand_id, description,
-          base_price, old_price, base_unit, images, status, is_featured, is_recommended
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          base_price, old_price, purchase_price, base_unit, images, status, is_featured, is_recommended
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         name_en, name_bn || null, slug, category_id, (brand_id && brand_id !== 'none' && brand_id !== 'null') ? brand_id : null, description || null,
-        base_price, old_price || null, base_unit || null, JSON.stringify(imageUrls),
+        base_price, old_price || null, purchase_price || null, base_unit || null, JSON.stringify(imageUrls),
         status || 'active', is_featured === 'true' ? 1 : 0, is_recommended === 'true' ? 1 : 0
       ]);
 
@@ -283,23 +285,37 @@ module.exports = (db) => {
         // Has variants
         for (const variant of parsedVariants) {
           const [varResult] = await connection.query(`
-            INSERT INTO product_variants (product_id, name, price, old_price, sku)
-            VALUES (?, ?, ?, ?, ?)
-          `, [productId, variant.name, variant.price, variant.old_price || null, variant.sku || null]);
+            INSERT INTO product_variants (product_id, name, price, old_price, purchase_price, sku)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `, [productId, variant.name, variant.price, variant.old_price || null, variant.purchase_price || null, variant.sku || null]);
 
           // Create inventory for variant
           await connection.query(`
-            INSERT INTO inventory (product_id, variant_id, stock)
-            VALUES (?, ?, ?)
-          `, [productId, varResult.insertId, variant.stock || 0]);
+            INSERT INTO inventory (product_id, variant_id, stock, opening_stock)
+            VALUES (?, ?, ?, ?)
+          `, [productId, varResult.insertId, variant.stock || 0, variant.stock || 0]);
+
+          if ((variant.stock || 0) > 0) {
+            await connection.query(`
+              INSERT INTO inventory_ledger (product_id, variant_id, type, reference, quantity, balance)
+              VALUES (?, ?, 'opening', 'Product Creation', ?, ?)
+            `, [productId, varResult.insertId, variant.stock, variant.stock]);
+          }
         }
-      } else {
-        // No variants, use base product inventory
-        const stock = req.body.stock || 0;
+      }
+
+      // Always save base stock
+      const stock = req.body.stock || 0;
+      await connection.query(`
+        INSERT INTO inventory (product_id, variant_id, stock, opening_stock)
+        VALUES (?, NULL, ?, ?)
+      `, [productId, stock, stock]);
+
+      if (stock > 0) {
         await connection.query(`
-          INSERT INTO inventory (product_id, variant_id, stock)
-          VALUES (?, NULL, ?)
-        `, [productId, stock]);
+          INSERT INTO inventory_ledger (product_id, variant_id, type, reference, quantity, balance)
+          VALUES (?, NULL, 'opening', 'Product Creation', ?, ?)
+        `, [productId, stock, stock]);
       }
 
       await connection.commit();
@@ -377,7 +393,7 @@ module.exports = (db) => {
       const { id } = req.params;
       const {
         name_en, name_bn, category_id, brand_id, description,
-        base_price, old_price, base_unit, status,
+        base_price, old_price, purchase_price, base_unit, status,
         is_featured, is_recommended, variants, existing_images
       } = req.body;
 
@@ -409,44 +425,92 @@ module.exports = (db) => {
       await connection.query(`
         UPDATE products SET
           name_en = ?, name_bn = ?, category_id = ?, brand_id = ?, description = ?,
-          base_price = ?, old_price = ?, base_unit = ?, images = ?, status = ?,
+          base_price = ?, old_price = ?, purchase_price = ?, base_unit = ?, images = ?, status = ?,
           is_featured = ?, is_recommended = ?
         WHERE id = ?
       `, [
         name_en, name_bn || null, category_id, (finalBrandId && finalBrandId !== 'none' && finalBrandId !== 'null') ? finalBrandId : null, description || null,
-        base_price, old_price || null, base_unit || null, JSON.stringify(imageUrls),
+        base_price, old_price || null, purchase_price || null, base_unit || null, JSON.stringify(imageUrls),
         status || 'active', is_featured === 'true' || is_featured === true ? 1 : 0, is_recommended === 'true' || is_recommended === true ? 1 : 0,
         id
       ]);
 
-      // Update Variants & Inventory (Simple approach: delete existing variants/inventory and recreate them to handle removed variants easily)
-      
-      await connection.query(`DELETE FROM inventory WHERE product_id = ?`, [id]);
-      await connection.query(`DELETE FROM product_variants WHERE product_id = ?`, [id]);
+      // Fetch existing variants and base inventory
+      const [oldVariants] = await connection.query(`SELECT * FROM product_variants WHERE product_id = ?`, [id]);
+      const [oldInventories] = await connection.query(`SELECT * FROM inventory WHERE product_id = ? AND variant_id IS NULL`, [id]);
 
       let parsedVariants = [];
       if (variants) {
         try { parsedVariants = JSON.parse(variants); } catch (e) {}
       }
 
+      const processedVariantIds = [];
+
       if (parsedVariants.length > 0) {
         for (const variant of parsedVariants) {
-          const [varResult] = await connection.query(`
-            INSERT INTO product_variants (product_id, name, price, old_price, sku)
-            VALUES (?, ?, ?, ?, ?)
-          `, [id, variant.name, variant.price, variant.old_price || null, variant.sku || null]);
+          const oldVar = oldVariants.find(v => v.name === variant.name);
+          if (oldVar) {
+            // Update existing variant
+            await connection.query(`
+              UPDATE product_variants 
+              SET price = ?, old_price = ?, purchase_price = ?, sku = ? 
+              WHERE id = ?
+            `, [variant.price, variant.old_price || null, variant.purchase_price || null, variant.sku || null, oldVar.id]);
+            
+            // Only update stock, do not touch historical data
+            await connection.query(`
+              UPDATE inventory SET stock = ? WHERE variant_id = ?
+            `, [variant.stock || 0, oldVar.id]);
+            
+            processedVariantIds.push(oldVar.id);
+          } else {
+            // Insert new variant
+            const [varResult] = await connection.query(`
+              INSERT INTO product_variants (product_id, name, price, old_price, purchase_price, sku)
+              VALUES (?, ?, ?, ?, ?, ?)
+            `, [id, variant.name, variant.price, variant.old_price || null, variant.purchase_price || null, variant.sku || null]);
 
-          await connection.query(`
-            INSERT INTO inventory (product_id, variant_id, stock)
-            VALUES (?, ?, ?)
-          `, [id, varResult.insertId, variant.stock || 0]);
+            const stockVal = variant.stock || 0;
+            await connection.query(`
+              INSERT INTO inventory (product_id, variant_id, stock, opening_stock)
+              VALUES (?, ?, ?, ?)
+            `, [id, varResult.insertId, stockVal, stockVal]);
+
+            if (stockVal > 0) {
+              await connection.query(`
+                INSERT INTO inventory_ledger (product_id, variant_id, type, reference, quantity, balance)
+                VALUES (?, ?, 'opening', 'Product Edit - New Variant', ?, ?)
+              `, [id, varResult.insertId, stockVal, stockVal]);
+            }
+          }
         }
-      } else {
-        const stock = req.body.stock || 0;
+      }
+
+      // Delete removed variants
+      for (const oldVar of oldVariants) {
+        if (!processedVariantIds.includes(oldVar.id)) {
+          await connection.query(`DELETE FROM product_variants WHERE id = ?`, [oldVar.id]);
+        }
+      }
+
+      // Handle Base Stock
+      const baseStock = req.body.stock || 0;
+      if (oldInventories.length > 0) {
         await connection.query(`
-          INSERT INTO inventory (product_id, variant_id, stock)
-          VALUES (?, NULL, ?)
-        `, [id, stock]);
+          UPDATE inventory SET stock = ? WHERE id = ?
+        `, [baseStock, oldInventories[0].id]);
+      } else {
+        await connection.query(`
+          INSERT INTO inventory (product_id, variant_id, stock, opening_stock)
+          VALUES (?, NULL, ?, ?)
+        `, [id, baseStock, baseStock]);
+        
+        if (baseStock > 0) {
+          await connection.query(`
+            INSERT INTO inventory_ledger (product_id, variant_id, type, reference, quantity, balance)
+            VALUES (?, NULL, 'opening', 'Product Edit - New Base Stock', ?, ?)
+          `, [id, baseStock, baseStock]);
+        }
       }
 
       await connection.commit();
@@ -665,9 +729,16 @@ module.exports = (db) => {
             // Base Inventory (Only add if no variant is specified on this first row, or if both are specified it's fine)
             if (!variant_name || variant_name.trim() === '') {
               await connection.query(`
-                INSERT INTO inventory (product_id, variant_id, stock)
-                VALUES (?, NULL, ?)
-              `, [productId, stock]);
+                INSERT INTO inventory (product_id, variant_id, stock, opening_stock)
+                VALUES (?, NULL, ?, ?)
+              `, [productId, stock, stock]);
+
+              if (stock > 0) {
+                await connection.query(`
+                  INSERT INTO inventory_ledger (product_id, variant_id, type, reference, quantity, balance)
+                  VALUES (?, NULL, 'opening', 'CSV Import', ?, ?)
+                `, [productId, stock, stock]);
+              }
             }
           }
 
@@ -685,10 +756,18 @@ module.exports = (db) => {
             ]);
             
             // Inventory for Variant
+            const vStock = parseInt(variant_stock || stock || 0);
             await connection.query(`
-              INSERT INTO inventory (product_id, variant_id, stock)
-              VALUES (?, ?, ?)
-            `, [productId, vRes.insertId, parseInt(variant_stock || stock || 0)]);
+              INSERT INTO inventory (product_id, variant_id, stock, opening_stock)
+              VALUES (?, ?, ?, ?)
+            `, [productId, vRes.insertId, vStock, vStock]);
+
+            if (vStock > 0) {
+              await connection.query(`
+                INSERT INTO inventory_ledger (product_id, variant_id, type, reference, quantity, balance)
+                VALUES (?, ?, 'opening', 'CSV Import', ?, ?)
+              `, [productId, vRes.insertId, vStock, vStock]);
+            }
           }
 
           successCount++;

@@ -193,6 +193,12 @@ module.exports = (db) => {
       const product = products[0];
       product.images = typeof product.images === 'string' ? JSON.parse(product.images) : product.images;
 
+      // Fetch base stock
+      const [baseStockRows] = await db.query(`
+        SELECT stock FROM inventory WHERE product_id = ? AND variant_id IS NULL LIMIT 1
+      `, [product.id]);
+      product.base_stock = baseStockRows.length > 0 ? baseStockRows[0].stock : 0;
+
       // Fetch variants and their stock
       const [variants] = await db.query(`
         SELECT pv.*, i.stock 

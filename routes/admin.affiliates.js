@@ -6,13 +6,26 @@ module.exports = (db) => {
   // GET /api/admin/affiliates - Get all affiliates with their computed stats
   router.get('/', async (req, res) => {
     try {
+      const { startDate, endDate } = req.query;
+
       // Fetch affiliates
       const [affiliates] = await db.query('SELECT * FROM affiliates ORDER BY id DESC');
       
-      // Fetch orders that have an affiliate code (not cancelled)
-      const [orders] = await db.query(
-        "SELECT affiliate_code, total, DATE_FORMAT(created_at, '%Y-%m-%d') as order_date FROM orders WHERE affiliate_code IS NOT NULL AND status != 'cancelled'"
+      // Fetch ALL orders that have an affiliate code (not cancelled)
+      const [allOrders] = await db.query(
+        "SELECT affiliate_code, total, affiliate_paid, created_at as order_datetime, DATE_FORMAT(created_at, '%Y-%m-%d') as order_date FROM orders WHERE affiliate_code IS NOT NULL AND status != 'cancelled'"
       );
+
+      // Filter for period
+      let periodOrders = allOrders;
+      if (startDate && endDate) {
+        const start = new Date(startDate).getTime();
+        const end = new Date(endDate).getTime();
+        periodOrders = allOrders.filter(o => {
+           const time = new Date(o.order_datetime).getTime();
+           return time >= start && time <= end;
+        });
+      }
 
       // Get today's date in local format (YYYY-MM-DD)
       const now = new Date();
@@ -20,33 +33,47 @@ module.exports = (db) => {
 
       // Compute stats for each affiliate
       const enhancedAffiliates = affiliates.map(aff => {
-        const affiliateOrders = orders.filter(o => o.affiliate_code === aff.reference_code);
+        const lifetimeAffiliateOrders = allOrders.filter(o => o.affiliate_code === aff.reference_code);
+        const affiliateOrders = periodOrders.filter(o => o.affiliate_code === aff.reference_code);
         
         // Today's Sales
-        const todayOrders = affiliateOrders.filter(o => {
-           return o.order_date === today;
-        });
+        const todayOrders = affiliateOrders.filter(o => o.order_date === today);
 
         const todaysSalesCount = todayOrders.length;
         const todaysSalesTotal = todayOrders.reduce((sum, o) => sum + Number(o.total), 0);
+        const todayCommission = todaysSalesTotal * (Number(aff.commission_rate) / 100);
 
-        // Total Sales
+        // Total Sales (In Period)
         const totalSalesCount = affiliateOrders.length;
         const totalSalesTotal = affiliateOrders.reduce((sum, o) => sum + Number(o.total), 0);
-
-        // Commission
         const totalCommissionEarned = totalSalesTotal * (Number(aff.commission_rate) / 100);
-        const unpaidEarnings = totalCommissionEarned - Number(aff.paid_amount);
+
+        // Paid & Due (In Period)
+        const paidOrdersTotal = affiliateOrders.filter(o => o.affiliate_paid).reduce((sum, o) => sum + Number(o.total), 0);
+        const unpaidOrdersTotal = affiliateOrders.filter(o => !o.affiliate_paid).reduce((sum, o) => sum + Number(o.total), 0);
+        const paidEarnings = paidOrdersTotal * (Number(aff.commission_rate) / 100);
+        const unpaidEarnings = unpaidOrdersTotal * (Number(aff.commission_rate) / 100);
+
+        // Last Sale Date (Lifetime)
+        let lastSale = null;
+        if (lifetimeAffiliateOrders.length > 0) {
+           const sortedDates = lifetimeAffiliateOrders.map(o => new Date(o.order_datetime)).sort((a, b) => b - a);
+           lastSale = sortedDates[0];
+        }
 
         return {
           ...aff,
+          joined_date: aff.created_at,
+          last_sale: lastSale,
           stats: {
             todayCount: todaysSalesCount,
             todayTotal: todaysSalesTotal,
             totalCount: totalSalesCount,
             totalTotal: totalSalesTotal,
+            todayCommission: todayCommission,
             totalCommission: totalCommissionEarned,
-            unpaidEarnings: unpaidEarnings < 0 ? 0 : unpaidEarnings
+            paidEarnings: paidEarnings,
+            unpaidEarnings: unpaidEarnings
           }
         };
       });
@@ -55,14 +82,18 @@ module.exports = (db) => {
       const activeAffiliatesCount = affiliates.filter(a => a.status === 'active').length;
       const totalReferredSales = enhancedAffiliates.reduce((sum, a) => sum + a.stats.totalCount, 0);
       const globalRevenue = enhancedAffiliates.reduce((sum, a) => sum + a.stats.totalTotal, 0);
-      const totalCommissionsPaid = enhancedAffiliates.reduce((sum, a) => sum + Number(a.paid_amount), 0);
+      const totalCommissionsPaid = enhancedAffiliates.reduce((sum, a) => sum + a.stats.paidEarnings, 0);
+      const totalCommissionsEarned = enhancedAffiliates.reduce((sum, a) => sum + a.stats.totalCommission, 0);
+      const totalDueCommissions = enhancedAffiliates.reduce((sum, a) => sum + a.stats.unpaidEarnings, 0);
 
       res.json({
         summary: {
           activeAffiliates: activeAffiliatesCount,
           totalReferredSales,
           revenueGenerated: globalRevenue,
-          commissionsPaid: totalCommissionsPaid
+          totalCommission: totalCommissionsEarned,
+          commissionsPaid: totalCommissionsPaid,
+          dueCommission: totalDueCommissions
         },
         affiliates: enhancedAffiliates
       });
@@ -102,6 +133,7 @@ module.exports = (db) => {
   // PUT /api/admin/affiliates/:id/pay - Pay unpaid earnings
   router.put('/:id/pay', async (req, res) => {
     const { id } = req.params;
+    const { startDate, endDate } = req.body;
     
     try {
       const [aff] = await db.query('SELECT * FROM affiliates WHERE id = ?', [id]);
@@ -109,27 +141,49 @@ module.exports = (db) => {
       
       const affiliate = aff[0];
 
-      // Recompute unpaid earnings to know how much to add to paid_amount
-      const [orders] = await db.query(
-        "SELECT SUM(total) as revenue FROM orders WHERE affiliate_code = ? AND status != 'cancelled'",
-        [affiliate.reference_code]
-      );
+      let updateQuery = "UPDATE orders SET affiliate_paid = 1 WHERE affiliate_code = ? AND status != 'cancelled' AND affiliate_paid = 0";
+      const params = [affiliate.reference_code];
       
-      const revenue = Number(orders[0].revenue || 0);
-      const commissionEarned = revenue * (Number(affiliate.commission_rate) / 100);
-      const unpaid = commissionEarned - Number(affiliate.paid_amount);
-
-      if (unpaid <= 0) {
-        return res.status(400).json({ message: 'No unpaid earnings to pay' });
+      if (startDate && endDate) {
+        updateQuery += " AND created_at >= ? AND created_at <= ?";
+        params.push(new Date(startDate), new Date(endDate));
       }
 
-      const newPaidAmount = Number(affiliate.paid_amount) + unpaid;
+      const [result] = await db.query(updateQuery, params);
 
-      await db.query('UPDATE affiliates SET paid_amount = ? WHERE id = ?', [newPaidAmount, id]);
+      if (result.affectedRows === 0) {
+        return res.status(400).json({ message: 'No unpaid earnings found for the selected period' });
+      }
 
-      res.json({ message: 'Payment recorded successfully' });
+      res.json({ message: `Successfully paid for ${result.affectedRows} orders` });
     } catch (err) {
       console.error('Pay affiliate error:', err);
+      res.status(500).json({ message: 'Server error' });
+    }
+  });
+  // PUT /api/admin/affiliates/:id - Edit affiliate
+  router.put('/:id', async (req, res) => {
+    const { id } = req.params;
+    const { name, commissionRate, status } = req.body;
+    
+    if (!name || commissionRate === undefined) {
+      return res.status(400).json({ message: 'Name and commission rate are required' });
+    }
+
+    try {
+      const [existing] = await db.query('SELECT id FROM affiliates WHERE id = ?', [id]);
+      if (existing.length === 0) {
+        return res.status(404).json({ message: 'Affiliate not found' });
+      }
+
+      await db.query(
+        'UPDATE affiliates SET name = ?, commission_rate = ?, status = ? WHERE id = ?',
+        [name, commissionRate, status || 'active', id]
+      );
+
+      res.json({ message: 'Affiliate updated successfully' });
+    } catch (err) {
+      console.error('Update affiliate error:', err);
       res.status(500).json({ message: 'Server error' });
     }
   });

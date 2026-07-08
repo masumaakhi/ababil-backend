@@ -40,6 +40,48 @@ module.exports = (db) => {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
+  // GET /api/admin/customers/:id
+  // Fetch a single customer's details, order history, and address
+  // ─────────────────────────────────────────────────────────────────────────
+  router.get('/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+      const query = `
+        SELECT 
+          c.id, 
+          c.name, 
+          c.email, 
+          c.phone, 
+          c.account_type, 
+          c.is_active, 
+          c.created_at,
+          COUNT(o.id) as total_orders,
+          COALESCE(SUM(o.total), 0) as total_spent
+        FROM customers c
+        LEFT JOIN orders o ON c.id = o.customer_id
+        WHERE c.id = ?
+        GROUP BY c.id
+      `;
+      const [customerRows] = await db.query(query, [id]);
+      if (customerRows.length === 0) return res.status(404).json({ message: 'Customer not found' });
+      const customer = customerRows[0];
+
+      // Fetch Order History
+      const [orderRows] = await db.query('SELECT order_id, created_at as date, total, status FROM orders WHERE customer_id = ? ORDER BY created_at DESC', [id]);
+      customer.order_history = orderRows;
+
+      // Determine default address from latest order
+      const [addressRows] = await db.query('SELECT address, city FROM orders WHERE customer_id = ? AND address IS NOT NULL AND address != "" ORDER BY created_at DESC LIMIT 1', [id]);
+      customer.default_address = addressRows.length > 0 ? addressRows[0] : null;
+
+      res.json(customer);
+    } catch (err) {
+      console.error('Error fetching customer details:', err);
+      res.status(500).json({ message: 'Server error fetching customer details' });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
   // PATCH /api/admin/customers/bulk-block
   // Block or unblock multiple customers
   // ─────────────────────────────────────────────────────────────────────────

@@ -11,19 +11,10 @@ async function runMigrations() {
   let db;
 
   try {
-    // 1. Parse URL to get DB name and connect without DB to create it first
+    // 1. Parse URL to get DB name
     const { URL } = require('url');
     const dbUrl = new URL(process.env.DATABASE_URL);
     const dbName = dbUrl.pathname.replace('/', '');
-    
-    dbUrl.pathname = '/'; // Connect to root
-    
-    rootDb = await mysql.createConnection(dbUrl.toString() + '?ssl={"rejectUnauthorized":false}');
-    console.log(`✅ Connected to MySQL server.`);
-    
-    await rootDb.execute(`CREATE DATABASE IF NOT EXISTS \`${dbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`);
-    console.log(`  ✔ Database '${dbName}' ensured.`);
-    await rootDb.end();
 
     // 2. Connect to the specific database
     db = await mysql.createConnection(
@@ -56,6 +47,27 @@ async function runMigrations() {
     console.log('  ✔ Table: customers');
 
 
+    // ── admin_roles table ─────────────────────────────────────────────────────
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS admin_roles (
+        id          INT AUTO_INCREMENT PRIMARY KEY,
+        name        VARCHAR(100) NOT NULL UNIQUE,
+        description VARCHAR(255) DEFAULT NULL,
+        permissions JSON         NOT NULL,
+        created_at  TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+    console.log('  ✔ Table: admin_roles');
+
+    // Seed default Super Admin role if not exists
+    try {
+      const [existingRoles] = await db.query('SELECT id FROM admin_roles WHERE name = "Super Admin"');
+      if (existingRoles.length === 0) {
+        const allPerms = JSON.stringify(['manage_admins', 'manage_customers', 'manage_orders', 'manage_products', 'system_settings', 'view_orders', 'view_products', 'view_reports', 'manage_marketing']);
+        await db.execute('INSERT INTO admin_roles (name, description, permissions) VALUES (?, ?, ?)', ['Super Admin', 'Full system access', allPerms]);
+      }
+    } catch (e) {}
+
     // ── admin_users table ─────────────────────────────────────────────────────
     await db.execute(`
       CREATE TABLE IF NOT EXISTS admin_users (
@@ -63,12 +75,37 @@ async function runMigrations() {
         name         VARCHAR(100) NOT NULL,
         email        VARCHAR(150) NOT NULL UNIQUE,
         password     VARCHAR(255) NOT NULL,
-        role         ENUM('admin','super_admin') DEFAULT 'admin',
+        role_id      INT                         DEFAULT NULL,
         is_active    TINYINT(1)                  DEFAULT 1,
-        created_at   TIMESTAMP                   DEFAULT CURRENT_TIMESTAMP
+        created_at   TIMESTAMP                   DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (role_id) REFERENCES admin_roles(id) ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
+    
+    // Attempt to migrate existing 'role' ENUM to 'role_id' if needed
+    try {
+      await db.execute('ALTER TABLE admin_users ADD COLUMN role_id INT DEFAULT NULL');
+      await db.execute('ALTER TABLE admin_users ADD CONSTRAINT fk_admin_role FOREIGN KEY (role_id) REFERENCES admin_roles(id) ON DELETE SET NULL');
+      
+      // Update existing super admins
+      await db.execute('UPDATE admin_users SET role_id = (SELECT id FROM admin_roles WHERE name = "Super Admin" LIMIT 1) WHERE role = "super_admin" OR role_id IS NULL');
+    } catch (e) {}
+
     console.log('  ✔ Table: admin_users');
+
+    // ── admin_activity_logs table ─────────────────────────────────────────────
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS admin_activity_logs (
+        id          INT AUTO_INCREMENT PRIMARY KEY,
+        admin_id    INT          NOT NULL,
+        action      VARCHAR(100) NOT NULL,
+        entity      VARCHAR(100) DEFAULT NULL,
+        details     TEXT         DEFAULT NULL,
+        created_at  TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (admin_id) REFERENCES admin_users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+    console.log('  ✔ Table: admin_activity_logs');
 
     // ── categories table ──────────────────────────────────────────────────────
     await db.execute(`
@@ -153,16 +190,45 @@ async function runMigrations() {
     // ── inventory table ───────────────────────────────────────────────────────
     await db.execute(`
       CREATE TABLE IF NOT EXISTS inventory (
-        id          INT AUTO_INCREMENT PRIMARY KEY,
-        product_id  INT NOT NULL,
-        variant_id  INT DEFAULT NULL,
-        stock       INT NOT NULL DEFAULT 0,
-        updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        id              INT AUTO_INCREMENT PRIMARY KEY,
+        product_id      INT NOT NULL,
+        variant_id      INT DEFAULT NULL,
+        stock           INT NOT NULL DEFAULT 0,
+        opening_stock   INT DEFAULT 0,
+        purchased_stock INT DEFAULT 0,
+        sold_stock      INT DEFAULT 0,
+        returned_stock  INT DEFAULT 0,
+        adjusted_stock  INT DEFAULT 0,
+        reorder_level   INT DEFAULT 10,
+        min_stock       INT DEFAULT 0,
+        warehouse       VARCHAR(100) DEFAULT 'Main',
+        rack_location   VARCHAR(100) DEFAULT NULL,
+        batch_number    VARCHAR(100) DEFAULT NULL,
+        expiry_date     DATE DEFAULT NULL,
+        notes           TEXT DEFAULT NULL,
+        updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
         FOREIGN KEY (variant_id) REFERENCES product_variants(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
     console.log('  ✔ Table: inventory');
+
+    // ── inventory_ledger table ────────────────────────────────────────────────
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS inventory_ledger (
+        id          INT AUTO_INCREMENT PRIMARY KEY,
+        product_id  INT NOT NULL,
+        variant_id  INT DEFAULT NULL,
+        type        ENUM('opening', 'purchase', 'sale', 'return', 'adjustment', 'damage', 'lost', 'correction') NOT NULL,
+        reference   VARCHAR(100) DEFAULT NULL,
+        quantity    INT NOT NULL,
+        balance     INT NOT NULL,
+        created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+        FOREIGN KEY (variant_id) REFERENCES product_variants(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+    console.log('  ✔ Table: inventory_ledger');
 
     // ── orders table ──────────────────────────────────────────────────────────
     await db.execute(`
@@ -241,7 +307,7 @@ async function runMigrations() {
     console.log('  ✔ Table: flash_sale_settings');
 
     // Add columns to products table if they don't exist
-    try {
+     try {
       await db.execute('ALTER TABLE products ADD COLUMN is_flash_sale TINYINT(1) DEFAULT 0;');
       console.log('  ✔ Added is_flash_sale column to products table');
     } catch (e) {
@@ -254,6 +320,44 @@ async function runMigrations() {
     } catch (e) {
       // Column might already exist
     }
+
+    try {
+      await db.execute('ALTER TABLE products ADD COLUMN purchase_price DECIMAL(10,2) DEFAULT NULL;');
+      console.log('  ✔ Added purchase_price column to products table');
+    } catch (e) {
+      // Column might already exist
+    }
+
+    try {
+      await db.execute('ALTER TABLE product_variants ADD COLUMN purchase_price DECIMAL(10,2) DEFAULT NULL;');
+      console.log('  ✔ Added purchase_price column to product_variants table');
+    } catch (e) {
+      // Column might already exist
+    }
+
+    // Add columns to inventory table for ERP system
+    const inventoryColumns = [
+      'ADD COLUMN opening_stock INT DEFAULT 0',
+      'ADD COLUMN purchased_stock INT DEFAULT 0',
+      'ADD COLUMN sold_stock INT DEFAULT 0',
+      'ADD COLUMN returned_stock INT DEFAULT 0',
+      'ADD COLUMN adjusted_stock INT DEFAULT 0',
+      'ADD COLUMN reorder_level INT DEFAULT 10',
+      'ADD COLUMN min_stock INT DEFAULT 0',
+      'ADD COLUMN warehouse VARCHAR(100) DEFAULT "Main"',
+      'ADD COLUMN rack_location VARCHAR(100) DEFAULT NULL',
+      'ADD COLUMN batch_number VARCHAR(100) DEFAULT NULL',
+      'ADD COLUMN expiry_date DATE DEFAULT NULL',
+      'ADD COLUMN notes TEXT DEFAULT NULL'
+    ];
+    for (const colDef of inventoryColumns) {
+      try {
+        await db.execute(`ALTER TABLE inventory ${colDef};`);
+      } catch (e) {
+        // Ignore, column likely already exists
+      }
+    }
+    console.log('  ✔ Checked/Added ERP columns to inventory table');
 
     // Insert default flash sale row if empty
     const [existingFlash] = await db.execute('SELECT id FROM flash_sale_settings LIMIT 1');

@@ -5,6 +5,7 @@ const mysql      = require('mysql2/promise');
 const helmet     = require('helmet');
 const morgan     = require('morgan');
 const runMigrations = require('./migrate');
+const logAdminActivity = require('./middleware/activityLogger');
 
 // Load environment variables
 dotenv.config();
@@ -64,13 +65,21 @@ const adminFlashSaleRoutes = require('./routes/admin.flash-sale');
 const adminDashboardRoutes = require('./routes/admin.dashboard');
 const adminPromosRoutes = require('./routes/admin.promos');
 const adminHomeSectionsRoutes = require('./routes/admin.home-sections');
+const adminInventoryRoutes = require('./routes/admin.inventory');
+const adminActivityRoutes = require('./routes/admin.activity');
+const adminSettingsRoutes = require('./routes/admin.settings');
 
 app.use('/api/auth',       authRoutes(db));
 app.use('/api/products',   productRoutes(db));
 app.use('/api/orders',     orderRoutes(db));
 app.use('/api/banners',    bannerRoutes(db));
 app.use('/api/flash-sale', flashSaleRoutes(db));
+
 app.use('/api/admin/auth', adminAuthRoutes(db));
+
+// Apply activity logger to all other admin routes
+app.use('/api/admin', logAdminActivity(db));
+
 app.use('/api/admin/customers', adminCustomerRoutes(db));
 app.use('/api/admin/products', adminProductRoutes(db));
 app.use('/api/admin/brands', adminBrandRoutes(db));
@@ -84,6 +93,9 @@ app.use('/api/admin/flash-sale', adminFlashSaleRoutes(db));
 app.use('/api/admin/dashboard', adminDashboardRoutes(db));
 app.use('/api/admin/promos', adminPromosRoutes(db));
 app.use('/api/admin/home-sections', adminHomeSectionsRoutes(db));
+app.use('/api/admin/inventory', adminInventoryRoutes(db));
+app.use('/api/admin/activity', adminActivityRoutes(db));
+app.use('/api/admin/settings', adminSettingsRoutes(db));
 
 
 // ── Root Endpoint ───────────────────────────────────────────────────────────
@@ -96,8 +108,19 @@ app.get('/', (req, res) => {
   });
 });
 
+// ── Debug Pool ────────────────────────────────────────────────────────────
+app.get('/api/debug-pool', (req, res) => {
+  if (!db) return res.send('No db');
+  res.json({
+    total: db.pool._allConnections.length,
+    free: db.pool._freeConnections.length,
+    queue: db.pool._connectionQueue.length
+  });
+});
+
 // ── Health Check ────────────────────────────────────────────────────────────
 app.get('/api/health', async (req, res) => {
+  console.log('Health check requested');
   if (!db) {
     return res.status(500).json({ status: 'Error', database: 'Pool not initialized' });
   }
@@ -123,11 +146,8 @@ app.use((err, req, res, next) => {
 });
 
 // ── Start Server ─────────────────────────────────────────────────────────────
-runMigrations().then(() => {
-  app.listen(PORT, () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
-    console.log(`🏥 Health check: http://localhost:${PORT}/api/health`);
-  });
-}).catch(err => {
-  console.error('Failed to run migrations. Server not started.', err);
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`🏥 Health check: http://localhost:${PORT}/api/health`);
 });
+// trigger restart

@@ -1,0 +1,34 @@
+Created At: 2026-07-07T21:09:52Z
+Completed At: 2026-07-07T21:09:52Z
+File Path: `file:///d:/Desktop/ababil-shop/frontend/src/app/checkout/page.tsx`
+Total Lines: 469
+Total Bytes: 23462
+Showing lines 270 to 295
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+270:                         className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm focus:border-brand-teal focus:outline-none"
+271:                       />
+272:                     </div>
+273: 
+274:                     <div>
+275:                       <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">
+276:                         {language === "en" ? "District / City" : "জেলা / শহর"}
+277:                       </label>
+278:                       <select
+279:                         value={city}
+280:                         onChange={(e) => setCity(e.target.value)}
+281:                         className="w-full rounded-2xl border border-slate-200 px-4 py-3.5 text-sm focus:border-brand-teal focus:outline-none bg-white font-semibold text-slate-700"
+282:                       >
+283:                         <option value="Dhaka">Dhaka</option>
+284:                         <option value="Chittagong">Chittagong</option>
+285:                         <option value="Sylhet">Sylhet</option>
+286:                         <option value="Rajshahi">Rajshahi</option>
+287:                         <option value="Khulna">Khulna</option>
+288:                         <option value="Barisal">Barisal</option>
+289:                         <option value="Rangpur">Rangpur</option>
+290:                       </select>
+291:                     </div>
+292:                   </div>
+293: 
+294:                   <div>
+295:                     <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
