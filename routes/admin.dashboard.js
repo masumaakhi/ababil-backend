@@ -145,12 +145,48 @@ module.exports = (db) => {
       }
 
       // 3. Recent orders (always last 8)
-      const [recentOrders] = await db.query(`
-        SELECT order_id, customer_name, total, status, created_at
+      const [recentOrdersRows] = await db.query(`
+        SELECT order_id, customer_name, total, status, created_at, items
         FROM orders
         ORDER BY created_at DESC
         LIMIT 8
       `);
+
+      const recentOrders = recentOrdersRows.map(order => {
+        let items = [];
+        try {
+          items = typeof order.items === 'string' ? JSON.parse(order.items) : (order.items || []);
+        } catch (e) {}
+
+        const enrichedItems = items.map(item => {
+          let pId = item.id;
+          let vId = null;
+          if (typeof item.id === 'string' && item.id.includes('-')) {
+            const parts = item.id.split('-');
+            pId = parts[0];
+            vId = parts[1];
+          }
+          if (vId === 'base') vId = null;
+
+          let itemPurchasePrice = 0;
+          if (vId && variantMap[vId]) {
+            itemPurchasePrice = variantMap[vId].purchase_price || productMap[pId]?.purchase_price || 0;
+          } else if (pId && productMap[pId]) {
+            itemPurchasePrice = productMap[pId].purchase_price || 0;
+          }
+
+          return {
+            ...item,
+            purchase_price: itemPurchasePrice
+          };
+        });
+
+        // Don't send stringified items, send array
+        return {
+          ...order,
+          items: enrichedItems
+        };
+      });
 
       // 4. Generate chart data
       const generateChartData = (ordersList, start, end) => {

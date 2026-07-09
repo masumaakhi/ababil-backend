@@ -60,7 +60,7 @@ module.exports = (db) => {
   // ─────────────────────────────────────────────────────────────────────────
   router.get('/', async (req, res) => {
     try {
-      const { search, category, brand, stock_status } = req.query;
+      const { search, category, brand, stock_status, startDate, endDate } = req.query;
 
       let whereClauses = [];
       let params = [];
@@ -85,7 +85,7 @@ module.exports = (db) => {
       // Each base and variant has a row in `inventory`.
       const [products] = await db.query(`
         SELECT 
-          p.id, p.name_en, p.base_price, p.purchase_price, p.images, p.status, p.category_id, p.brand_id,
+          p.id, p.name_en, p.base_price, p.purchase_price, p.images, p.status, p.category_id, p.brand_id, p.created_at,
           c.name_en AS category_name,
           (SELECT COUNT(id) FROM product_variants WHERE product_id = p.id) AS variant_count,
           SUM(i.opening_stock) AS total_opening_stock,
@@ -134,17 +134,49 @@ module.exports = (db) => {
         });
       }
 
+      // Add period stock in/out if dates are provided
+      if (startDate || endDate) {
+        let ledgerWhere = '';
+        let ledgerParams = [];
+        if (startDate && endDate) {
+          ledgerWhere = 'WHERE created_at BETWEEN ? AND ?';
+          ledgerParams = [startDate, endDate];
+        } else if (startDate) {
+          ledgerWhere = 'WHERE created_at >= ?';
+          ledgerParams = [startDate];
+        } else if (endDate) {
+          ledgerWhere = 'WHERE created_at <= ?';
+          ledgerParams = [endDate];
+        }
+
+        const [ledgerStats] = await db.query(`
+          SELECT product_id,
+            SUM(CASE WHEN type = 'purchase' THEN quantity ELSE 0 END) as period_stock_in,
+            SUM(CASE WHEN type = 'sale' THEN ABS(quantity) ELSE 0 END) as period_stock_out
+          FROM inventory_ledger
+          ${ledgerWhere}
+          GROUP BY product_id
+        `, ledgerParams);
+
+        products.forEach(p => {
+          const stat = ledgerStats.find(s => s.product_id === p.id);
+          p.period_stock_in = stat ? stat.period_stock_in : 0;
+          p.period_stock_out = stat ? stat.period_stock_out : 0;
+        });
+      }
+
       // Filter by stock status if requested
       let filteredProducts = products;
-      if (stock_status) {
+      if (stock_status && stock_status !== 'Stock Status') {
         filteredProducts = filteredProducts.filter(p => {
           const currentStock = p.total_current_stock || 0;
           if (stock_status === 'out_of_stock') return currentStock <= 0;
           if (stock_status === 'low_stock') {
-             // For simplicity, say <= 5 globally, or check individual variants
              return currentStock > 0 && currentStock <= 5; 
           }
           if (stock_status === 'in_stock') return currentStock > 5;
+          if (stock_status === 'stock_in') return p.period_stock_in > 0;
+          if (stock_status === 'stock_out') return p.period_stock_out > 0;
           return true;
         });
       }

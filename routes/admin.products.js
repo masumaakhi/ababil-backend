@@ -221,7 +221,7 @@ module.exports = (db) => {
 
       let {
         name_en, name_bn, category_id, brand_id, new_brand_name, new_company_name, description,
-        base_price, old_price, purchase_price, base_unit, status, is_featured, is_recommended,
+        base_price, old_price, purchase_price, base_unit, status, is_featured, is_recommended, rating,
         variants // Expecting JSON string of variants array: [{name, price, sku, stock, purchase_price}]
       } = req.body;
 
@@ -265,12 +265,12 @@ module.exports = (db) => {
       const [prodResult] = await connection.query(`
         INSERT INTO products (
           name_en, name_bn, slug, category_id, brand_id, description,
-          base_price, old_price, purchase_price, base_unit, images, status, is_featured, is_recommended
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          base_price, old_price, purchase_price, base_unit, images, status, is_featured, is_recommended, rating
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         name_en, name_bn || null, slug, category_id, (brand_id && brand_id !== 'none' && brand_id !== 'null') ? brand_id : null, description || null,
         base_price, old_price || null, purchase_price || null, base_unit || null, JSON.stringify(imageUrls),
-        status || 'active', is_featured === 'true' ? 1 : 0, is_recommended === 'true' ? 1 : 0
+        status || 'active', is_featured === 'true' ? 1 : 0, is_recommended === 'true' ? 1 : 0, rating || 0.0
       ]);
 
       const productId = prodResult.insertId;
@@ -394,7 +394,7 @@ module.exports = (db) => {
       const {
         name_en, name_bn, category_id, brand_id, description,
         base_price, old_price, purchase_price, base_unit, status,
-        is_featured, is_recommended, variants, existing_images
+        is_featured, is_recommended, rating, variants, existing_images
       } = req.body;
 
       // Handle brand
@@ -426,12 +426,12 @@ module.exports = (db) => {
         UPDATE products SET
           name_en = ?, name_bn = ?, category_id = ?, brand_id = ?, description = ?,
           base_price = ?, old_price = ?, purchase_price = ?, base_unit = ?, images = ?, status = ?,
-          is_featured = ?, is_recommended = ?
+          is_featured = ?, is_recommended = ?, rating = ?
         WHERE id = ?
       `, [
         name_en, name_bn || null, category_id, (finalBrandId && finalBrandId !== 'none' && finalBrandId !== 'null') ? finalBrandId : null, description || null,
         base_price, old_price || null, purchase_price || null, base_unit || null, JSON.stringify(imageUrls),
-        status || 'active', is_featured === 'true' || is_featured === true ? 1 : 0, is_recommended === 'true' || is_recommended === true ? 1 : 0,
+        status || 'active', is_featured === 'true' || is_featured === true ? 1 : 0, is_recommended === 'true' || is_recommended === true ? 1 : 0, rating || 0.0,
         id
       ]);
 
@@ -610,6 +610,7 @@ module.exports = (db) => {
           const status = statusRaw.toLowerCase() === 'inactive' ? 'inactive' : 'active';
           const is_featured = (row['Featured'] || row.is_featured)?.toString().toLowerCase() === 'true' ? 1 : 0;
           const is_recommended = (row['Recommended'] || row.is_recommended)?.toString().toLowerCase() === 'true' ? 1 : 0;
+          const rating = parseFloat(row['Rating'] || row.rating || 0.0);
 
           // Check if Product already exists (either in DB or created in this batch)
           let productId = productCache.get(final_name_en);
@@ -715,12 +716,12 @@ module.exports = (db) => {
             const [pRes] = await connection.query(`
               INSERT INTO products (
                 name_en, name_bn, slug, category_id, brand_id, description,
-                base_price, old_price, base_unit, images, status, is_featured, is_recommended
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                base_price, old_price, base_unit, images, status, is_featured, is_recommended, rating
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `, [
               final_name_en, name_bn || null, slug, category_id, brand_id, description || null,
               base_price, old_price ? parseFloat(old_price) : null, base_unit || null,
-              JSON.stringify(imagesArray), status, is_featured, is_recommended
+              JSON.stringify(imagesArray), status, is_featured, is_recommended, rating
             ]);
 
             productId = pRes.insertId;

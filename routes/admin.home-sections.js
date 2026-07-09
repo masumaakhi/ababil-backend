@@ -137,6 +137,34 @@ module.exports = (db) => {
     }
   });
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // PUT /api/admin/home-sections/:catId/products/reorder
+  // Reorder pinned products
+  // ─────────────────────────────────────────────────────────────────────────
+  router.put('/:catId/products/reorder', async (req, res) => {
+    const { catId } = req.params;
+    const { productIds } = req.body;
+    
+    if (!Array.isArray(productIds)) {
+      return res.status(400).json({ message: 'productIds array is required' });
+    }
+
+    try {
+      // Begin transaction if supported, but for simplicity we'll just run queries
+      for (let i = 0; i < productIds.length; i++) {
+        await db.query(
+          'UPDATE home_section_products SET sort_order = ? WHERE category_id = ? AND product_id = ?',
+          [i + 1, catId, productIds[i]]
+        );
+      }
+      await clearCache();
+      res.json({ message: 'Products reordered successfully' });
+    } catch (err) {
+      console.error('Reorder products error:', err);
+      res.status(500).json({ message: 'Server error' });
+    }
+  });
+
   // Helper: recursively get ALL descendant category IDs (any depth)
   const getAllDescendantIds = async (rootId) => {
     const allIds = [parseInt(rootId)];
