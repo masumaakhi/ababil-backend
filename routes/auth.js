@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt  = require('bcrypt');
 const jwt     = require('jsonwebtoken');
+const { createNotification } = require('../utils/notification');
 const router  = express.Router();
 
 module.exports = (db) => {
@@ -59,6 +60,8 @@ module.exports = (db) => {
         'INSERT INTO customers (name, phone, email, password, account_type) VALUES (?, ?, ?, ?, "customer")',
         [name, phone || null, email || null, hashedPassword]
       );
+      
+      await createNotification(db, 'New User Registration', `${name} just created a new customer account.`, 'auth');
 
       res.status(201).json({ message: 'Registration successful' });
     } catch (err) {
@@ -110,6 +113,8 @@ module.exports = (db) => {
         process.env.JWT_SECRET,
         { expiresIn: '7d' }
       );
+      
+      await createNotification(db, 'User Login', `${user.name} logged into their account.`, 'auth');
 
       res.json({
         token,
@@ -150,6 +155,8 @@ module.exports = (db) => {
         'UPDATE customers SET password=?, account_type="customer" WHERE phone=?',
         [hashed, phone]
       );
+      
+      await createNotification(db, 'Password Reset', `Password was reset for account with phone ${phone}.`, 'auth');
 
       res.json({ message: 'Password set successfully. You can now log in.' });
     } catch (err) {
@@ -186,6 +193,7 @@ module.exports = (db) => {
         );
         const [newUser] = await db.query('SELECT * FROM customers WHERE id = ?', [result.insertId]);
         user = newUser[0];
+        await createNotification(db, 'New User Registration', `${user.name} signed up via Google.`, 'auth');
       } else {
         // If user exists but no google_id, link them
         if (!user.google_id) {

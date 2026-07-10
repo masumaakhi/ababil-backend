@@ -1,4 +1,5 @@
 const express = require('express');
+const { createNotification } = require('../utils/notification');
 const router  = express.Router();
 
 module.exports = (db) => {
@@ -127,6 +128,8 @@ module.exports = (db) => {
           );
         }
       }
+
+      await createNotification(db, 'New Order Received', `Order #${orderId} was placed by ${name} for ৳${total}.`, 'order');
 
       res.json({
         orderId,

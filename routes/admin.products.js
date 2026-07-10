@@ -594,6 +594,7 @@ module.exports = (db) => {
           const brand_name = row['Brand'] || row.brand_name;
           
           const description = row['Description'] || row.description;
+          const purchase_price = row['Purchase Price'] || row.purchase_price || null;
           const base_price = parseFloat(row['Base Price'] || row.base_price || 0);
           const old_price = row['Old Price'] || row.old_price;
           const base_unit = row['Base Unit'] || row.base_unit;
@@ -601,13 +602,14 @@ module.exports = (db) => {
           
           const image_url = row['Image URL'] || row.image_url;
           const variant_name = row['Variant Name'] || row.variant_name;
+          const variant_purchase_price = row['Variant Purchase Price'] || row.variant_purchase_price || null;
           const variant_price = row['Variant Price'] || row.variant_price;
           const variant_old_price = row['Variant Old Price'] || row.variant_old_price;
           const sku = row['SKU'] || row.sku;
           const variant_stock = row['Variant Stock'] || row.variant_stock;
           
           const statusRaw = row['Status'] || row.status || 'active';
-          const status = statusRaw.toLowerCase() === 'inactive' ? 'inactive' : 'active';
+          const status = statusRaw.toLowerCase() === 'inactive' ? 'inactive' : (statusRaw.toLowerCase() === 'draft' ? 'draft' : 'active');
           const is_featured = (row['Featured'] || row.is_featured)?.toString().toLowerCase() === 'true' ? 1 : 0;
           const is_recommended = (row['Recommended'] || row.is_recommended)?.toString().toLowerCase() === 'true' ? 1 : 0;
           const rating = parseFloat(row['Rating'] || row.rating || 0.0);
@@ -716,10 +718,11 @@ module.exports = (db) => {
             const [pRes] = await connection.query(`
               INSERT INTO products (
                 name_en, name_bn, slug, category_id, brand_id, description,
-                base_price, old_price, base_unit, images, status, is_featured, is_recommended, rating
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                purchase_price, base_price, old_price, base_unit, images, status, is_featured, is_recommended, rating
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `, [
               final_name_en, name_bn || null, slug, category_id, brand_id, description || null,
+              purchase_price ? parseFloat(purchase_price) : null,
               base_price, old_price ? parseFloat(old_price) : null, base_unit || null,
               JSON.stringify(imagesArray), status, is_featured, is_recommended, rating
             ]);
@@ -727,18 +730,31 @@ module.exports = (db) => {
             productId = pRes.insertId;
             productCache.set(final_name_en, productId);
             
-            // Base Inventory (Only add if no variant is specified on this first row, or if both are specified it's fine)
-            if (!variant_name || variant_name.trim() === '') {
-              await connection.query(`
-                INSERT INTO inventory (product_id, variant_id, stock, opening_stock)
-                VALUES (?, NULL, ?, ?)
-              `, [productId, stock, stock]);
+            // Base Inventory (Always add base inventory for new product)
+            await connection.query(`
+              INSERT INTO inventory (product_id, variant_id, stock, opening_stock)
+              VALUES (?, NULL, ?, ?)
+            `, [productId, stock, stock]);
 
-              if (stock > 0) {
-                await connection.query(`
-                  INSERT INTO inventory_ledger (product_id, variant_id, type, reference, quantity, balance)
-                  VALUES (?, NULL, 'opening', 'CSV Import', ?, ?)
-                `, [productId, stock, stock]);
+            if (stock > 0) {
+              await connection.query(`
+                INSERT INTO inventory_ledger (product_id, variant_id, type, reference, quantity, balance)
+                VALUES (?, NULL, 'opening', 'CSV Import', ?, ?)
+              `, [productId, stock, stock]);
+            }
+          } else {
+            if (row['Base Stock'] !== undefined && String(row['Base Stock']).trim() !== '') {
+              const newBaseStock = parseInt(row['Base Stock']);
+              if (!isNaN(newBaseStock)) {
+                const [existingInv] = await connection.query('SELECT id FROM inventory WHERE product_id = ? AND variant_id IS NULL LIMIT 1', [productId]);
+                if (existingInv.length > 0) {
+                  await connection.query('UPDATE inventory SET stock = ? WHERE id = ?', [newBaseStock, existingInv[0].id]);
+                } else {
+                  await connection.query(`
+                    INSERT INTO inventory (product_id, variant_id, stock, opening_stock)
+                    VALUES (?, NULL, ?, ?)
+                  `, [productId, newBaseStock, newBaseStock]);
+                }
               }
             }
           }
@@ -746,11 +762,12 @@ module.exports = (db) => {
           // === ADD VARIANT ===
           if (variant_name && variant_name.trim() !== '') {
             const [vRes] = await connection.query(`
-              INSERT INTO product_variants (product_id, name, price, old_price, sku)
-              VALUES (?, ?, ?, ?, ?)
+              INSERT INTO product_variants (product_id, name, purchase_price, price, old_price, sku)
+              VALUES (?, ?, ?, ?, ?, ?)
             `, [
               productId, 
-              variant_name, 
+              variant_name,
+              variant_purchase_price ? parseFloat(variant_purchase_price) : null,
               parseFloat(variant_price || base_price || 0), 
               variant_old_price ? parseFloat(variant_old_price) : null, 
               sku || null

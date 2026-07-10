@@ -107,6 +107,19 @@ async function runMigrations() {
     `);
     console.log('  ✔ Table: admin_activity_logs');
 
+    // ── admin_notifications table ─────────────────────────────────────────────
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS admin_notifications (
+        id          INT AUTO_INCREMENT PRIMARY KEY,
+        title       VARCHAR(255) NOT NULL,
+        message     TEXT         NOT NULL,
+        type        ENUM('order', 'auth', 'admin_activity', 'system') DEFAULT 'system',
+        is_read     TINYINT(1)   DEFAULT 0,
+        created_at  TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+    console.log('  ✔ Table: admin_notifications');
+
     // ── categories table ──────────────────────────────────────────────────────
     await db.execute(`
       CREATE TABLE IF NOT EXISTS categories (
@@ -245,7 +258,7 @@ async function runMigrations() {
         total          DECIMAL(10,2) NOT NULL,
         payment_method ENUM('cod','bkash') DEFAULT 'cod',
         affiliate_code VARCHAR(50)   DEFAULT NULL,
-        status         ENUM('pending','processing','shipped','delivered','cancelled') DEFAULT 'pending',
+        status         ENUM('pending','confirmed','processing','shipped','assigned_to_rider','out_for_delivery','delivered','cancelled') DEFAULT 'pending',
         created_at     TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

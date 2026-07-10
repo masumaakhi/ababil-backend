@@ -1,3 +1,5 @@
+const { createNotification } = require('../utils/notification');
+
 const logAdminActivity = (db) => {
   return async (req, res, next) => {
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
@@ -24,7 +26,11 @@ const logAdminActivity = (db) => {
 
             db.query('INSERT INTO admin_activity_logs (admin_id, action, entity, details) VALUES (?, ?, ?, ?)', 
               [adminId, action, entity, details]
-            ).catch(err => console.error('Error logging activity:', err));
+            )
+            .then(() => {
+              createNotification(db, `Admin Activity: ${action}`, `${req.admin.name || 'An admin'} performed ${action} on ${entity}`, 'admin_activity');
+            })
+            .catch(err => console.error('Error logging activity:', err));
           }
         }
         originalSend.apply(res, arguments);

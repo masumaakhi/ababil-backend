@@ -68,6 +68,7 @@ const adminHomeSectionsRoutes = require('./routes/admin.home-sections');
 const adminInventoryRoutes = require('./routes/admin.inventory');
 const adminActivityRoutes = require('./routes/admin.activity');
 const adminSettingsRoutes = require('./routes/admin.settings');
+const adminNotificationsRoutes = require('./routes/admin.notifications');
 
 app.use('/api/auth',       authRoutes(db));
 app.use('/api/products',   productRoutes(db));
@@ -96,6 +97,7 @@ app.use('/api/admin/home-sections', adminHomeSectionsRoutes(db));
 app.use('/api/admin/inventory', adminInventoryRoutes(db));
 app.use('/api/admin/activity', adminActivityRoutes(db));
 app.use('/api/admin/settings', adminSettingsRoutes(db));
+app.use('/api/admin/notifications', adminNotificationsRoutes(db));
 
 
 // ── Root Endpoint ───────────────────────────────────────────────────────────

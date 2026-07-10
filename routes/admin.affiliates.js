@@ -13,16 +13,23 @@ module.exports = (db) => {
       
       // Fetch ALL orders that have an affiliate code (not cancelled)
       const [allOrders] = await db.query(
-        "SELECT affiliate_code, total, affiliate_paid, created_at as order_datetime, DATE_FORMAT(created_at, '%Y-%m-%d') as order_date FROM orders WHERE affiliate_code IS NOT NULL AND status != 'cancelled'"
+        "SELECT affiliate_code, total, created_at as order_datetime, DATE_FORMAT(created_at, '%Y-%m-%d') as order_date FROM orders WHERE affiliate_code IS NOT NULL AND status != 'cancelled'"
       );
 
-      // Filter for period
+      // Fetch ALL payouts
+      const [allPayouts] = await db.query('SELECT * FROM affiliate_payouts');
+
       let periodOrders = allOrders;
+      let periodPayouts = allPayouts;
       if (startDate && endDate) {
         const start = new Date(startDate).getTime();
         const end = new Date(endDate).getTime();
         periodOrders = allOrders.filter(o => {
            const time = new Date(o.order_datetime).getTime();
+           return time >= start && time <= end;
+        });
+        periodPayouts = allPayouts.filter(p => {
+           const time = new Date(p.created_at).getTime();
            return time >= start && time <= end;
         });
       }
@@ -49,10 +56,9 @@ module.exports = (db) => {
         const totalCommissionEarned = totalSalesTotal * (Number(aff.commission_rate) / 100);
 
         // Paid & Due (In Period)
-        const paidOrdersTotal = affiliateOrders.filter(o => o.affiliate_paid).reduce((sum, o) => sum + Number(o.total), 0);
-        const unpaidOrdersTotal = affiliateOrders.filter(o => !o.affiliate_paid).reduce((sum, o) => sum + Number(o.total), 0);
-        const paidEarnings = paidOrdersTotal * (Number(aff.commission_rate) / 100);
-        const unpaidEarnings = unpaidOrdersTotal * (Number(aff.commission_rate) / 100);
+        const affiliatePayouts = periodPayouts.filter(p => p.affiliate_id === aff.id);
+        const paidEarnings = affiliatePayouts.reduce((sum, p) => sum + Number(p.amount), 0);
+        const unpaidEarnings = totalCommissionEarned - paidEarnings;
 
         // Last Sale Date (Lifetime)
         let lastSale = null;
@@ -133,29 +139,29 @@ module.exports = (db) => {
   // PUT /api/admin/affiliates/:id/pay - Pay unpaid earnings
   router.put('/:id/pay', async (req, res) => {
     const { id } = req.params;
-    const { startDate, endDate } = req.body;
+    const { amount, startDate, endDate } = req.body;
     
+    if (!amount || isNaN(amount) || amount <= 0) {
+       return res.status(400).json({ message: 'Valid amount is required' });
+    }
+
     try {
       const [aff] = await db.query('SELECT * FROM affiliates WHERE id = ?', [id]);
       if (aff.length === 0) return res.status(404).json({ message: 'Affiliate not found' });
       
-      const affiliate = aff[0];
-
-      let updateQuery = "UPDATE orders SET affiliate_paid = 1 WHERE affiliate_code = ? AND status != 'cancelled' AND affiliate_paid = 0";
-      const params = [affiliate.reference_code];
-      
+      let period_start = null;
+      let period_end = null;
       if (startDate && endDate) {
-        updateQuery += " AND created_at >= ? AND created_at <= ?";
-        params.push(new Date(startDate), new Date(endDate));
+         period_start = new Date(startDate);
+         period_end = new Date(endDate);
       }
 
-      const [result] = await db.query(updateQuery, params);
+      await db.query(
+         'INSERT INTO affiliate_payouts (affiliate_id, amount, period_start, period_end) VALUES (?, ?, ?, ?)',
+         [id, amount, period_start, period_end]
+      );
 
-      if (result.affectedRows === 0) {
-        return res.status(400).json({ message: 'No unpaid earnings found for the selected period' });
-      }
-
-      res.json({ message: `Successfully paid for ${result.affectedRows} orders` });
+      res.json({ message: 'Payment recorded successfully' });
     } catch (err) {
       console.error('Pay affiliate error:', err);
       res.status(500).json({ message: 'Server error' });

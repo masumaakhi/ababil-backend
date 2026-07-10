@@ -408,8 +408,7 @@ module.exports = (db) => {
           
           let qty = parseInt(row['Quantity'] || row.quantity || 0);
           
-          if (!sku) throw new Error("SKU is required to find product");
-
+          // SKU check removed to allow Product ID fallback
           // Find product ID from SKU (Assuming SKU is in product_variants or products don't have SKU directly yet)
           // Wait, products table doesn't have a direct SKU in our schema, only variants have SKU. 
           // If variantSku is provided, match variant. If not, maybe match product by name?
@@ -521,6 +520,7 @@ module.exports = (db) => {
       }
 
       await connection.commit();
+      console.log('Bulk inventory errors:', errors); // Added for debugging
       res.json({ 
         message: 'Bulk inventory update complete', 
         summary: { total: results.length, success: successCount, failed: errors.length },

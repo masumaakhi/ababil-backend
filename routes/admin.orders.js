@@ -158,11 +158,14 @@ module.exports = (db) => {
       
       const [statusCounts] = await db.query(`
         SELECT 
-          COALESCE(SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END), 0) as confirmed,
           COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) as pending,
+          COALESCE(SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END), 0) as confirmed,
+          COALESCE(SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END), 0) as processing,
+          COALESCE(SUM(CASE WHEN status = 'shipped' THEN 1 ELSE 0 END), 0) as shipped,
+          COALESCE(SUM(CASE WHEN status = 'assigned_to_rider' THEN 1 ELSE 0 END), 0) as assigned_to_rider,
+          COALESCE(SUM(CASE WHEN status = 'out_for_delivery' THEN 1 ELSE 0 END), 0) as out_for_delivery,
           COALESCE(SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END), 0) as delivered,
-          COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) as cancelled,
-          COALESCE(SUM(CASE WHEN status = 'returned' THEN 1 ELSE 0 END), 0) as returned
+          COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) as cancelled
         FROM orders
         ${countsWhere}
       `, countsParams);
@@ -176,11 +179,14 @@ module.exports = (db) => {
           totalPages: Math.ceil(total / limit)
         },
         stats: {
-          confirmed: parseInt(statusCounts[0].confirmed),
           pending: parseInt(statusCounts[0].pending),
+          confirmed: parseInt(statusCounts[0].confirmed),
+          processing: parseInt(statusCounts[0].processing),
+          shipped: parseInt(statusCounts[0].shipped),
+          assigned_to_rider: parseInt(statusCounts[0].assigned_to_rider),
+          out_for_delivery: parseInt(statusCounts[0].out_for_delivery),
           delivered: parseInt(statusCounts[0].delivered),
-          cancelled: parseInt(statusCounts[0].cancelled),
-          returned: parseInt(statusCounts[0].returned)
+          cancelled: parseInt(statusCounts[0].cancelled)
         }
       });
     } catch (err) {
@@ -224,7 +230,7 @@ module.exports = (db) => {
     const { id } = req.params;
     const { status } = req.body;
 
-    const validStatuses = ['pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled'];
+    const validStatuses = ['pending', 'confirmed', 'processing', 'shipped', 'assigned_to_rider', 'out_for_delivery', 'delivered', 'cancelled'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ message: 'Invalid status' });
     }
@@ -347,7 +353,7 @@ module.exports = (db) => {
       return res.status(400).json({ message: 'No orders selected' });
     }
 
-    const validStatuses = ['pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled'];
+    const validStatuses = ['pending', 'confirmed', 'processing', 'shipped', 'assigned_to_rider', 'out_for_delivery', 'delivered', 'cancelled'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ message: 'Invalid status' });
     }
@@ -404,7 +410,7 @@ module.exports = (db) => {
         const trackingUrl = `https://steadfast.com.bd/t/${consignmentId}`;
 
         await db.query(
-          `UPDATE orders SET status = 'shipped', consignment_id = ?, tracking_url = ? WHERE ${column} = ?`,
+          `UPDATE orders SET status = 'processing', consignment_id = ?, tracking_url = ? WHERE ${column} = ?`,
           [consignmentId, trackingUrl, id]
         );
       }
