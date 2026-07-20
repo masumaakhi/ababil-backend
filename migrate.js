@@ -265,6 +265,13 @@ async function runMigrations() {
     `);
     console.log('  ✔ Table: orders');
 
+    try {
+      await db.execute('ALTER TABLE orders ADD COLUMN upazila VARCHAR(100) DEFAULT NULL AFTER city;');
+      console.log('  ✔ Added upazila column to orders table');
+    } catch (e) {
+      // Column might already exist
+    }
+
     // ── banners table ──────────────────────────────────────────────────────────
     await db.execute(`
       CREATE TABLE IF NOT EXISTS banners (

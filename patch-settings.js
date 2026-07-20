@@ -21,7 +21,10 @@ async function patchSettings() {
       ['store_address', 'Mirpur 10, Dhaka, Bangladesh'],
       ['steadfast_api_key', ''],
       ['steadfast_secret_key', ''],
-      ['shipping_inside_dhaka', '60'],
+      ['shipping_target_city', 'Dhaka'],
+      ['shipping_inside_label', 'Inside Dhaka'],
+      ['shipping_inside_dhaka', '80'],
+      ['shipping_outside_label', 'Outside Dhaka'],
       ['shipping_outside_dhaka', '120'],
       ['notify_order_placed', 'true'],
       ['notify_order_dispatched', 'true']

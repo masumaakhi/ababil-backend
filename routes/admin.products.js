@@ -253,7 +253,16 @@ module.exports = (db) => {
       const slug = name_en.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Date.now();
 
       // Upload Images to Cloudinary
-      const imageUrls = [];
+      let imageUrls = [];
+      if (req.body.existing_images) {
+        try {
+          const parsedUrls = JSON.parse(req.body.existing_images);
+          if (Array.isArray(parsedUrls)) {
+            imageUrls = [...parsedUrls];
+          }
+        } catch (e) {}
+      }
+      
       if (req.files && req.files.length > 0) {
         for (const file of req.files) {
           const url = await uploadToCloudinary(file.buffer);

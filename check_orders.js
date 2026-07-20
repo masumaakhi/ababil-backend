@@ -1,0 +1,9 @@
+const mysql = require('mysql2/promise');
+require('dotenv').config();
+async function run() {
+  const db = await mysql.createConnection(process.env.DATABASE_URL + '?ssl={"rejectUnauthorized":false}');
+  const [rows] = await db.query('SELECT id, order_id, customer_id, customer_name, address FROM orders ORDER BY id DESC LIMIT 5');
+  console.log(rows);
+  process.exit();
+}
+run();

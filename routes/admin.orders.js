@@ -391,7 +391,7 @@ module.exports = (db) => {
 
   // ─────────────────────────────────────────────────────────────────────────
   // POST /api/admin/orders/send-courier
-  // Mock sending orders to Steadfast/Courier
+  // Send orders to Steadfast Courier API
   // ─────────────────────────────────────────────────────────────────────────
   router.post('/send-courier', async (req, res) => {
     const { orderIds } = req.body;
@@ -401,21 +401,82 @@ module.exports = (db) => {
     }
 
     try {
-      const isNumeric = !isNaN(orderIds[0]);
-      const column = isNumeric ? 'id' : 'order_id';
+      // 1. Fetch API keys from settings
+      const [settings] = await db.query('SELECT setting_key, setting_value FROM store_settings WHERE setting_key IN ("steadfast_api_key", "steadfast_secret_key")');
+      const apiKeyRow = settings.find(s => s.setting_key === 'steadfast_api_key');
+      const secretKeyRow = settings.find(s => s.setting_key === 'steadfast_secret_key');
 
-      // Loop through each to generate unique tracking info
-      for (const id of orderIds) {
-        const consignmentId = 'ST-' + Math.floor(100000 + Math.random() * 900000);
-        const trackingUrl = `https://steadfast.com.bd/t/${consignmentId}`;
+      const apiKey = apiKeyRow ? apiKeyRow.setting_value : null;
+      const secretKey = secretKeyRow ? secretKeyRow.setting_value : null;
 
-        await db.query(
-          `UPDATE orders SET status = 'processing', consignment_id = ?, tracking_url = ? WHERE ${column} = ?`,
-          [consignmentId, trackingUrl, id]
-        );
+      if (!apiKey || !secretKey) {
+        return res.status(400).json({ message: 'Steadfast API credentials are not configured in settings.' });
       }
 
-      res.json({ message: `${orderIds.length} orders successfully sent to Courier.` });
+      const isNumeric = !isNaN(orderIds[0]);
+      const column = isNumeric ? 'id' : 'order_id';
+      const placeholders = orderIds.map(() => '?').join(',');
+
+      // 2. Fetch order details
+      const [orders] = await db.query(`SELECT id, order_id, customer_name, phone, address, total FROM orders WHERE ${column} IN (${placeholders})`, orderIds);
+
+      let successCount = 0;
+      let failCount = 0;
+
+      // 3. Loop through and make API calls
+      for (const order of orders) {
+        try {
+          const payload = {
+            invoice: order.order_id,
+            recipient_name: order.customer_name || 'Customer',
+            recipient_phone: order.phone || '01000000000',
+            recipient_address: order.address || 'N/A',
+            cod_amount: order.total
+          };
+
+          const response = await fetch('https://portal.packzy.com/api/v1/create_order', {
+            method: 'POST',
+            headers: {
+              'Api-Key': apiKey,
+              'Secret-Key': secretKey,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+          });
+
+          const textData = await response.text();
+          let data;
+          try {
+            data = JSON.parse(textData);
+          } catch (e) {
+            data = { message: textData || 'Invalid response from courier API' };
+          }
+
+          if (response.ok && data.status === 200 && data.consignment) {
+            const consignmentId = data.consignment.consignment_id;
+            const trackingCode = data.consignment.tracking_code;
+            const trackingUrl = `https://steadfast.com.bd/t/${trackingCode || consignmentId}`;
+
+            await db.query(
+              `UPDATE orders SET status = 'processing', consignment_id = ?, tracking_url = ? WHERE id = ?`,
+              [consignmentId, trackingUrl, order.id]
+            );
+            successCount++;
+          } else {
+            console.error('Steadfast API Error for order:', order.order_id, data);
+            failCount++;
+          }
+        } catch (apiErr) {
+          console.error('Failed to send order to Steadfast:', order.order_id, apiErr);
+          failCount++;
+        }
+      }
+
+      if (successCount === 0 && failCount > 0) {
+         return res.status(400).json({ message: `Failed to send all ${failCount} orders. Courier API Error: Check your API keys and account status.` });
+      }
+
+      res.json({ message: `${successCount} orders sent successfully.` + (failCount > 0 ? ` ${failCount} failed.` : '') });
     } catch (err) {
       console.error('Send courier error:', err);
       res.status(500).json({ message: 'Server error sending to courier' });

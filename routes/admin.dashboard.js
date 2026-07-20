@@ -9,6 +9,18 @@ module.exports = (db) => {
   router.get('/stats', async (req, res) => {
     try {
       const { startDate, endDate } = req.query;
+
+      // Fetch store settings for shipping fees
+      const [settingsRows] = await db.query('SELECT setting_key, setting_value FROM store_settings WHERE setting_key IN ("shipping_target_city", "shipping_inside_dhaka", "shipping_outside_dhaka")');
+      let targetCity = "dhaka";
+      let insideFee = 80;
+      let outsideFee = 120;
+      
+      settingsRows.forEach(row => {
+        if (row.setting_key === 'shipping_target_city') targetCity = (row.setting_value || 'dhaka').toLowerCase();
+        if (row.setting_key === 'shipping_inside_dhaka') insideFee = parseFloat(row.setting_value) || 80;
+        if (row.setting_key === 'shipping_outside_dhaka') outsideFee = parseFloat(row.setting_value) || 120;
+      });
       
       // Fetch all products and variants to get purchase prices
       const [products] = await db.query('SELECT id, purchase_price, base_price FROM products');
@@ -45,6 +57,7 @@ module.exports = (db) => {
           ordersCount++;
           const status = (order.status || '').toLowerCase();
           const total = parseFloat(order.total) || 0;
+          const city = (order.city || '').toLowerCase();
 
           if (status === 'delivered') {
             deliveredCount++;
@@ -84,7 +97,13 @@ module.exports = (db) => {
           if (status !== 'cancelled') {
             revenue += total;
             purchasePrice += orderPurchasePrice;
-            const orderProfit = total - orderPurchasePrice;
+            
+            // Calculate delivery fee for this order
+            const deliveryFee = city === targetCity ? insideFee : outsideFee;
+            
+            // Net profit = total received - cost of products - delivery fee paid to courier
+            const orderProfit = total - orderPurchasePrice - deliveryFee;
+            
             profit += orderProfit;
 
             if (status === 'delivered') {
@@ -109,12 +128,12 @@ module.exports = (db) => {
       let currentOrders = [];
       if (startDate && endDate) {
         [currentOrders] = await db.query(
-          'SELECT total, status, items, created_at FROM orders WHERE created_at BETWEEN ? AND ?',
+          'SELECT total, status, items, created_at, city FROM orders WHERE created_at BETWEEN ? AND ?',
           [startDate, endDate]
         );
       } else {
         [currentOrders] = await db.query(
-          'SELECT total, status, items, created_at FROM orders'
+          'SELECT total, status, items, created_at, city FROM orders'
         );
       }
 
@@ -138,7 +157,7 @@ module.exports = (db) => {
         const prevEnd = startDate;
 
         const [prevOrders] = await db.query(
-          'SELECT total, status, items, created_at FROM orders WHERE created_at BETWEEN ? AND ?',
+          'SELECT total, status, items, created_at, city FROM orders WHERE created_at BETWEEN ? AND ?',
           [prevStart, prevEnd]
         );
         prevStats = calculateStats(prevOrders);

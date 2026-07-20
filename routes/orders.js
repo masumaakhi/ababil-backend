@@ -11,7 +11,7 @@ module.exports = (db) => {
   router.post('/guest', async (req, res) => {
     const {
       name, phone, email,
-      address, city,
+      address, upazila, city,
       items, total,
       paymentMethod, transactionId, affiliateCode
     } = req.body;
@@ -30,43 +30,57 @@ module.exports = (db) => {
     let autoCreated = false;
 
     try {
-      let existingCustomer = null;
-
-      // Email দিয়ে আগে চেক করা (কারণ email unique)
-      if (email) {
-        const [rows] = await db.query('SELECT id, account_type FROM customers WHERE email = ?', [email]);
-        if (rows.length > 0) existingCustomer = rows[0];
-      }
-
-      // Email দিয়ে না পেলে Phone দিয়ে চেক করা
-      if (!existingCustomer && phone) {
-        const [rows] = await db.query('SELECT id, account_type FROM customers WHERE phone = ?', [phone]);
-        if (rows.length > 0) existingCustomer = rows[0];
-      }
-
-      if (existingCustomer) {
-        // আগে থেকে account আছে — link করো
-        customerId = existingCustomer.id;
-        // Name আপডেট করো (guest ছিল)
-        if (existingCustomer.account_type === 'guest') {
-          await db.query('UPDATE customers SET name=? WHERE id=?', [name, customerId]);
+      // Check for JWT token
+      const token = req.headers.authorization?.split(' ')[1];
+      if (token) {
+        try {
+          const decoded = require('jsonwebtoken').verify(token, process.env.JWT_SECRET);
+          customerId = decoded.id;
+        } catch (e) {
+          // invalid token, fallback to guest logic
         }
+      }
+
+      if (customerId) {
+        // Logged in user, update address and phone if null
+        await db.query('UPDATE customers SET name=?, address=?, phone=COALESCE(phone, ?) WHERE id=?', [name, `${address}\n${upazila ? upazila + ', ' : ''}${city || 'Dhaka'}`, phone, customerId]);
       } else {
-        // নতুন guest account তৈরি
-        const [result] = await db.query(
-          'INSERT INTO customers (name, phone, email, account_type) VALUES (?, ?, ?, "guest")',
-          [name, phone, email || null]
-        );
-        customerId  = result.insertId;
-        autoCreated = true;
+        let existingCustomer = null;
+
+        // Email দিয়ে আগে চেক করা (কারণ email unique)
+        if (email) {
+          const [rows] = await db.query('SELECT id, account_type FROM customers WHERE email = ?', [email]);
+          if (rows.length > 0) existingCustomer = rows[0];
+        }
+
+        // Email দিয়ে না পেলে Phone দিয়ে চেক করা
+        if (!existingCustomer && phone) {
+          const [rows] = await db.query('SELECT id, account_type FROM customers WHERE phone = ?', [phone]);
+          if (rows.length > 0) existingCustomer = rows[0];
+        }
+
+        if (existingCustomer) {
+          // আগে থেকে account আছে — link করো
+          customerId = existingCustomer.id;
+          // Name and address আপডেট করো
+          await db.query('UPDATE customers SET name=?, address=?, phone=COALESCE(phone, ?) WHERE id=?', [name, `${address}\n${upazila ? upazila + ', ' : ''}${city || 'Dhaka'}`, phone, customerId]);
+        } else {
+          // নতুন guest account তৈরি
+          const [result] = await db.query(
+            'INSERT INTO customers (name, phone, email, address, account_type) VALUES (?, ?, ?, ?, "guest")',
+            [name, phone, email || null, `${address}\n${upazila ? upazila + ', ' : ''}${city || 'Dhaka'}`]
+          );
+          customerId  = result.insertId;
+          autoCreated = true;
+        }
       }
 
       // ── Order save ──
       await db.query(
         `INSERT INTO orders
-          (order_id, customer_id, customer_name, phone, email, address, city,
+          (order_id, customer_id, customer_name, phone, email, address, upazila, city,
            items, total, payment_method, transaction_id, affiliate_code)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           orderId,
           customerId,
@@ -74,6 +88,7 @@ module.exports = (db) => {
           phone,
           email || null,
           address,
+          upazila || null,
           city || 'Dhaka',
           JSON.stringify(items),
           total,
@@ -257,6 +272,49 @@ module.exports = (db) => {
       res.json({ orders: rows });
     } catch (err) {
       console.error('My orders error:', err);
+      res.status(401).json({ message: 'Invalid token or server error' });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GET /api/orders/my-products
+  // Logged-in user এর সফলভাবে ডেলিভারি হওয়া প্রোডাক্টগুলো দেখা
+  // ─────────────────────────────────────────────────────────────────────────
+  router.get('/my-products', async (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ message: 'Token required' });
+
+    try {
+      const decoded = require('jsonwebtoken').verify(token, process.env.JWT_SECRET);
+      
+      const [rows] = await db.query(
+        'SELECT items FROM orders WHERE customer_id = ? AND status = "delivered" ORDER BY id DESC',
+        [decoded.id]
+      );
+      
+      let allProducts = [];
+      const productIds = new Set();
+
+      rows.forEach(row => {
+        let items = [];
+        try {
+          items = typeof row.items === 'string' ? JSON.parse(row.items) : row.items;
+        } catch(e) {}
+        
+        if (Array.isArray(items)) {
+          items.forEach(item => {
+            // Deduplicate by ID
+            if (!productIds.has(item.id)) {
+              productIds.add(item.id);
+              allProducts.push(item);
+            }
+          });
+        }
+      });
+
+      res.json({ products: allProducts });
+    } catch (err) {
+      console.error('My products error:', err);
       res.status(401).json({ message: 'Invalid token or server error' });
     }
   });

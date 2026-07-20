@@ -69,12 +69,14 @@ const adminInventoryRoutes = require('./routes/admin.inventory');
 const adminActivityRoutes = require('./routes/admin.activity');
 const adminSettingsRoutes = require('./routes/admin.settings');
 const adminNotificationsRoutes = require('./routes/admin.notifications');
+const settingsRoutes = require('./routes/settings');
 
 app.use('/api/auth',       authRoutes(db));
 app.use('/api/products',   productRoutes(db));
 app.use('/api/orders',     orderRoutes(db));
 app.use('/api/banners',    bannerRoutes(db));
 app.use('/api/flash-sale', flashSaleRoutes(db));
+app.use('/api/settings',   settingsRoutes(db));
 
 app.use('/api/admin/auth', adminAuthRoutes(db));
 
