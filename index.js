@@ -10,6 +10,9 @@ const logAdminActivity = require('./middleware/activityLogger');
 // Load environment variables
 dotenv.config();
 
+// Enforce Bangladesh Standard Time globally for all Date operations in Node.js
+process.env.TZ = 'Asia/Dhaka';
+
 
 const app  = express();
 const PORT = process.env.PORT || 5250;
@@ -39,7 +42,7 @@ app.use(express.urlencoded({ extended: true }));
 // ── MySQL Connection Pool ───────────────────────────────────────────────────
 let db;
 try {
-  db = mysql.createPool(process.env.DATABASE_URL + '?ssl={"rejectUnauthorized":false}');
+  db = mysql.createPool(process.env.DATABASE_URL + '?ssl={"rejectUnauthorized":false}&timezone=Z');
   console.log('✅ MySQL connection pool initialized (Railway).');
 } catch (error) {
   console.error('❌ Failed to initialize MySQL pool:', error.message);
@@ -70,6 +73,8 @@ const adminActivityRoutes = require('./routes/admin.activity');
 const adminSettingsRoutes = require('./routes/admin.settings');
 const adminNotificationsRoutes = require('./routes/admin.notifications');
 const settingsRoutes = require('./routes/settings');
+const analyticsRoutes = require('./routes/analytics');
+const adminAnalyticsRoutes = require('./routes/admin.analytics');
 
 app.use('/api/auth',       authRoutes(db));
 app.use('/api/products',   productRoutes(db));
@@ -100,6 +105,8 @@ app.use('/api/admin/inventory', adminInventoryRoutes(db));
 app.use('/api/admin/activity', adminActivityRoutes(db));
 app.use('/api/admin/settings', adminSettingsRoutes(db));
 app.use('/api/admin/notifications', adminNotificationsRoutes(db));
+app.use('/api/analytics', analyticsRoutes(db));
+app.use('/api/admin/analytics', adminAnalyticsRoutes(db));
 
 
 // ── Root Endpoint ───────────────────────────────────────────────────────────

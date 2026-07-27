@@ -118,19 +118,34 @@ module.exports = (db) => {
           SELECT pv.*, 
                  i.id as inventory_id, i.stock, i.opening_stock, i.purchased_stock, 
                  i.sold_stock, i.returned_stock, i.adjusted_stock,
-                 i.reorder_level, i.warehouse, i.rack_location, i.batch_number, i.expiry_date
+                 i.reorder_level, i.warehouse, i.rack_location, i.batch_number, i.mfg_date, i.expiry_date
           FROM product_variants pv
           LEFT JOIN inventory i ON i.variant_id = pv.id
           WHERE pv.product_id IN (${placeholders})
         `, productIds);
 
+        // Fetch batches
+        const [batches] = await db.query(`
+          SELECT * FROM inventory_batches
+          WHERE product_id IN (${placeholders})
+          ORDER BY created_at DESC
+        `, productIds);
+
         products.forEach(p => {
           // Attach base inventory details
           const bInv = baseInventories.find(inv => inv.product_id === p.id);
-          p.inventory = bInv || null;
+          if (bInv) {
+            bInv.batches = batches.filter(b => b.product_id === p.id && b.variant_id === null);
+            p.inventory = bInv;
+          } else {
+            p.inventory = null;
+          }
 
           // Attach variants
-          p.variants = variants.filter(v => v.product_id === p.id);
+          p.variants = variants.filter(v => v.product_id === p.id).map(v => {
+            v.batches = batches.filter(b => b.product_id === p.id && b.variant_id === v.id);
+            return v;
+          });
         });
       }
 
@@ -226,7 +241,7 @@ module.exports = (db) => {
     try {
       await connection.beginTransaction();
 
-      const { product_id, variant_id, type, quantity, reference } = req.body;
+      const { product_id, variant_id, type, quantity, reference, mfg_date, expiry_date } = req.body;
       const qty = parseInt(quantity);
 
       if (!product_id || !type || isNaN(qty)) {
@@ -305,6 +320,11 @@ module.exports = (db) => {
       }
 
       updateFields.stock = newBalance;
+      
+      if (type === 'purchase') {
+        if (mfg_date) updateFields.mfg_date = mfg_date;
+        if (expiry_date) updateFields.expiry_date = expiry_date;
+      }
 
       // 1. Update Inventory Table
       const setParts = Object.keys(updateFields).map(key => `${key} = ?`).join(', ');
@@ -330,6 +350,14 @@ module.exports = (db) => {
         [product_id, vId, type, reference || null, signedQty, newBalance]
       );
 
+      if (['opening', 'purchase'].includes(type) && qty > 0) {
+        await connection.query(
+          `INSERT INTO inventory_batches (product_id, variant_id, quantity, mfg_date, expiry_date)
+           VALUES (?, ?, ?, ?, ?)`,
+          [product_id, vId, qty, mfg_date || null, expiry_date || null]
+        );
+      }
+
       await connection.commit();
       res.json({ message: 'Stock entry processed successfully', newBalance });
     } catch (err) {
@@ -348,16 +376,16 @@ module.exports = (db) => {
   router.put('/edit/:id', async (req, res) => {
     try {
       const { id } = req.params;
-      const { reorder_level, min_stock, warehouse, rack_location, batch_number, expiry_date, notes } = req.body;
+      const { reorder_level, min_stock, warehouse, rack_location, batch_number, expiry_date, mfg_date, notes } = req.body;
 
       await db.query(
         `UPDATE inventory SET 
           reorder_level = ?, min_stock = ?, warehouse = ?, rack_location = ?, 
-          batch_number = ?, expiry_date = ?, notes = ? 
+          batch_number = ?, expiry_date = ?, mfg_date = ?, notes = ? 
          WHERE id = ?`,
         [
           reorder_level || 10, min_stock || 0, warehouse || 'Main', 
-          rack_location || null, batch_number || null, expiry_date || null, notes || null, 
+          rack_location || null, batch_number || null, expiry_date || null, mfg_date || null, notes || null, 
           id
         ]
       );
@@ -482,11 +510,31 @@ module.exports = (db) => {
                break;
           }
 
+          const parseDate = (d) => {
+            if (!d) return null;
+            if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+            const dateObj = new Date(d);
+            if (isNaN(dateObj.getTime())) return null;
+            return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dhaka' }).format(dateObj);
+          };
+
           // Metadata updates
           if (row['Warehouse'] || row.warehouse) updateFields.warehouse = row['Warehouse'] || row.warehouse;
           if (row['Rack Location'] || row.rack_location) updateFields.rack_location = row['Rack Location'] || row.rack_location;
           if (row['Batch No'] || row.batch_number) updateFields.batch_number = row['Batch No'] || row.batch_number;
-          if (row['Expiry Date'] || row.expiry_date) updateFields.expiry_date = row['Expiry Date'] || row.expiry_date;
+          
+          const rawExpiry = row['Expiry Date'] || row.expiry_date;
+          if (rawExpiry) {
+            const parsed = parseDate(rawExpiry);
+            if (parsed) updateFields.expiry_date = parsed;
+          }
+          
+          const rawMfg = row['MFG Date'] || row.mfg_date;
+          if (rawMfg) {
+            const parsed = parseDate(rawMfg);
+            if (parsed) updateFields.mfg_date = parsed;
+          }
+          
           if (row['Reorder Level'] || row.reorder_level) updateFields.reorder_level = parseInt(row['Reorder Level'] || row.reorder_level);
           if (row['Notes'] || row.notes) updateFields.notes = row['Notes'] || row.notes;
 
@@ -511,6 +559,14 @@ module.exports = (db) => {
                VALUES (?, ?, ?, ?, ?, ?)`,
               [pId, vId, type, row['Reference'] || row.reference || 'CSV Bulk Update', signedQty, newBalance]
             );
+            
+            if (['opening', 'purchase'].includes(type) && qty > 0) {
+              await connection.query(
+                `INSERT INTO inventory_batches (product_id, variant_id, quantity, mfg_date, expiry_date)
+                 VALUES (?, ?, ?, ?, ?)`,
+                [pId, vId, qty, updateFields.mfg_date || null, updateFields.expiry_date || null]
+              );
+            }
           }
 
           successCount++;

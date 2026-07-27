@@ -13,12 +13,13 @@ async function runMigrations() {
   try {
     // 1. Parse URL to get DB name
     const { URL } = require('url');
-    const dbUrl = new URL(process.env.DATABASE_URL);
+    const cleanUrl = process.env.DATABASE_URL.replace(/^["']|["']$/g, '');
+    const dbUrl = new URL(cleanUrl);
     const dbName = dbUrl.pathname.replace('/', '');
 
     // 2. Connect to the specific database
     db = await mysql.createConnection(
-      process.env.DATABASE_URL + '?ssl={"rejectUnauthorized":false}'
+      cleanUrl + '?ssl={"rejectUnauthorized":false}'
     );
     console.log(`✅ Connected to database '${dbName}' for migrations.`);
 
@@ -217,6 +218,7 @@ async function runMigrations() {
         warehouse       VARCHAR(100) DEFAULT 'Main',
         rack_location   VARCHAR(100) DEFAULT NULL,
         batch_number    VARCHAR(100) DEFAULT NULL,
+        mfg_date        DATE DEFAULT NULL,
         expiry_date     DATE DEFAULT NULL,
         notes           TEXT DEFAULT NULL,
         updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -367,6 +369,7 @@ async function runMigrations() {
       'ADD COLUMN warehouse VARCHAR(100) DEFAULT "Main"',
       'ADD COLUMN rack_location VARCHAR(100) DEFAULT NULL',
       'ADD COLUMN batch_number VARCHAR(100) DEFAULT NULL',
+      'ADD COLUMN mfg_date DATE DEFAULT NULL',
       'ADD COLUMN expiry_date DATE DEFAULT NULL',
       'ADD COLUMN notes TEXT DEFAULT NULL'
     ];
@@ -397,6 +400,94 @@ async function runMigrations() {
       ]);
       console.log('  ✔ Default flash sale settings row inserted');
     }
+
+    // ── Analytics Module Tables ────────────────────────────────────────────────
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS analytics_settings (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        tracking_enabled TINYINT(1) DEFAULT 1,
+        heatmaps_enabled TINYINT(1) DEFAULT 1,
+        recordings_enabled TINYINT(1) DEFAULT 0,
+        retention_days INT DEFAULT 90,
+        ga4_id VARCHAR(50) DEFAULT NULL,
+        clarity_id VARCHAR(50) DEFAULT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+    
+    // Default settings
+    const [existingSettings] = await db.execute('SELECT id FROM analytics_settings LIMIT 1');
+    if (existingSettings.length === 0) {
+      await db.execute('INSERT INTO analytics_settings (tracking_enabled) VALUES (1)');
+    }
+    console.log('  ✔ Table: analytics_settings');
+
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS analytics_visitors (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        session_id VARCHAR(100) UNIQUE NOT NULL,
+        customer_id INT DEFAULT NULL,
+        ip_address VARCHAR(45) DEFAULT NULL,
+        user_agent TEXT DEFAULT NULL,
+        browser VARCHAR(50) DEFAULT NULL,
+        os VARCHAR(50) DEFAULT NULL,
+        device_type VARCHAR(20) DEFAULT 'desktop',
+        screen_resolution VARCHAR(20) DEFAULT NULL,
+        country VARCHAR(100) DEFAULT NULL,
+        city VARCHAR(100) DEFAULT NULL,
+        referrer TEXT DEFAULT NULL,
+        traffic_source VARCHAR(50) DEFAULT 'Direct',
+        entry_page TEXT DEFAULT NULL,
+        last_page TEXT DEFAULT NULL,
+        session_start TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        session_end TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        is_bounce TINYINT(1) DEFAULT 1,
+        FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+    console.log('  ✔ Table: analytics_visitors');
+
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS analytics_page_views (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        session_id VARCHAR(100) NOT NULL,
+        page_url TEXT NOT NULL,
+        page_title VARCHAR(255) DEFAULT NULL,
+        time_spent INT DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (session_id) REFERENCES analytics_visitors(session_id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+    console.log('  ✔ Table: analytics_page_views');
+
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS analytics_events (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        session_id VARCHAR(100) NOT NULL,
+        event_type VARCHAR(100) NOT NULL,
+        event_data JSON DEFAULT NULL,
+        page_url TEXT DEFAULT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (session_id) REFERENCES analytics_visitors(session_id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+    console.log('  ✔ Table: analytics_events');
+
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS analytics_heatmaps (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        session_id VARCHAR(100) NOT NULL,
+        page_url VARCHAR(255) NOT NULL,
+        click_x INT DEFAULT NULL,
+        click_y INT DEFAULT NULL,
+        scroll_depth INT DEFAULT NULL,
+        viewport_width INT DEFAULT NULL,
+        viewport_height INT DEFAULT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (session_id) REFERENCES analytics_visitors(session_id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+    console.log('  ✔ Table: analytics_heatmaps');
 
     // ── Default Super Admin (যদি না থাকে) ─────────────────────────────────────
     // Default password: Admin@1234

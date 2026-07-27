@@ -223,13 +223,14 @@ module.exports = (db) => {
           let temp = new Date(startDay);
           while (temp <= endDay) {
             const monthLabel = temp.toLocaleString('en-US', { month: 'short', year: '2-digit' });
-            chart.push({ day_name: monthLabel, count: 0, dateStr: temp.toISOString().substring(0, 7) });
+            const yMonth = `${temp.getFullYear()}-${String(temp.getMonth() + 1).padStart(2, '0')}`;
+            chart.push({ day_name: monthLabel, count: 0, dateStr: yMonth });
             temp.setMonth(temp.getMonth() + 1);
           }
           
           ordersList.forEach(order => {
             const orderDate = new Date(order.created_at);
-            const orderMonthStr = orderDate.toISOString().substring(0, 7);
+            const orderMonthStr = `${orderDate.getFullYear()}-${String(orderDate.getMonth() + 1).padStart(2, '0')}`;
             const slot = chart.find(c => c.dateStr === orderMonthStr);
             if (slot) slot.count++;
           });

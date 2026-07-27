@@ -33,7 +33,7 @@ module.exports = (db) => {
   // ─────────────────────────────────────────────────────────────────────────
   router.post('/categories', async (req, res) => {
     try {
-      const { name_en, name_bn, parent_id, icon, sort_order } = req.body;
+      const { name_en, name_bn, parent_id, icon, sort_order, affiliate_commission } = req.body;
 
       if (!name_en) {
         return res.status(400).json({ message: 'Category name (English) is required' });
@@ -44,11 +44,12 @@ module.exports = (db) => {
 
       const parentVal = parent_id ? parseInt(parent_id) : null;
       const sortVal = sort_order ? parseInt(sort_order) : 0;
+      const commissionVal = affiliate_commission ? parseFloat(affiliate_commission) : null;
 
       const [result] = await db.query(
-        `INSERT INTO categories (name_en, name_bn, slug, parent_id, icon, sort_order) 
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [name_en, name_bn || null, slug, parentVal, icon || null, sortVal]
+        `INSERT INTO categories (name_en, name_bn, slug, parent_id, icon, sort_order, affiliate_commission) 
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [name_en, name_bn || null, slug, parentVal, icon || null, sortVal, commissionVal]
       );
 
       // Invalidate cache
@@ -89,7 +90,7 @@ module.exports = (db) => {
   router.put('/categories/:id', async (req, res) => {
     try {
       const { id } = req.params;
-      const { name_en, name_bn, parent_id, icon, sort_order } = req.body;
+      const { name_en, name_bn, parent_id, icon, sort_order, affiliate_commission } = req.body;
 
       if (!name_en) {
         return res.status(400).json({ message: 'Category name (English) is required' });
@@ -100,12 +101,13 @@ module.exports = (db) => {
 
       const parentVal = parent_id ? parseInt(parent_id) : null;
       const sortVal = sort_order ? parseInt(sort_order) : 0;
+      const commissionVal = affiliate_commission ? parseFloat(affiliate_commission) : null;
 
       await db.query(
         `UPDATE categories 
-         SET name_en = ?, name_bn = ?, slug = ?, parent_id = ?, icon = ?, sort_order = ? 
+         SET name_en = ?, name_bn = ?, slug = ?, parent_id = ?, icon = ?, sort_order = ?, affiliate_commission = ? 
          WHERE id = ?`,
-        [name_en, name_bn || null, slug, parentVal, icon || null, sortVal, id]
+        [name_en, name_bn || null, slug, parentVal, icon || null, sortVal, commissionVal, id]
       );
 
       // Invalidate cache
@@ -222,7 +224,8 @@ module.exports = (db) => {
       let {
         name_en, name_bn, category_id, brand_id, new_brand_name, new_company_name, description,
         base_price, old_price, purchase_price, base_unit, status, is_featured, is_recommended, rating,
-        variants // Expecting JSON string of variants array: [{name, price, sku, stock, purchase_price}]
+        mfg_date, expiry_date,
+        variants // Expecting JSON string of variants array: [{name, price, sku, stock, purchase_price, mfg_date, expiry_date}]
       } = req.body;
 
       if (!name_en || !category_id || !base_price) {
@@ -300,15 +303,20 @@ module.exports = (db) => {
 
           // Create inventory for variant
           await connection.query(`
-            INSERT INTO inventory (product_id, variant_id, stock, opening_stock)
-            VALUES (?, ?, ?, ?)
-          `, [productId, varResult.insertId, variant.stock || 0, variant.stock || 0]);
+            INSERT INTO inventory (product_id, variant_id, stock, opening_stock, mfg_date, expiry_date)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `, [productId, varResult.insertId, variant.stock || 0, variant.stock || 0, variant.mfg_date || null, variant.expiry_date || null]);
 
           if ((variant.stock || 0) > 0) {
             await connection.query(`
               INSERT INTO inventory_ledger (product_id, variant_id, type, reference, quantity, balance)
               VALUES (?, ?, 'opening', 'Product Creation', ?, ?)
             `, [productId, varResult.insertId, variant.stock, variant.stock]);
+            
+            await connection.query(`
+              INSERT INTO inventory_batches (product_id, variant_id, quantity, mfg_date, expiry_date)
+              VALUES (?, ?, ?, ?, ?)
+            `, [productId, varResult.insertId, variant.stock, variant.mfg_date || null, variant.expiry_date || null]);
           }
         }
       }
@@ -316,15 +324,20 @@ module.exports = (db) => {
       // Always save base stock
       const stock = req.body.stock || 0;
       await connection.query(`
-        INSERT INTO inventory (product_id, variant_id, stock, opening_stock)
-        VALUES (?, NULL, ?, ?)
-      `, [productId, stock, stock]);
+        INSERT INTO inventory (product_id, variant_id, stock, opening_stock, mfg_date, expiry_date)
+        VALUES (?, NULL, ?, ?, ?, ?)
+      `, [productId, stock, stock, mfg_date || null, expiry_date || null]);
 
       if (stock > 0) {
         await connection.query(`
           INSERT INTO inventory_ledger (product_id, variant_id, type, reference, quantity, balance)
           VALUES (?, NULL, 'opening', 'Product Creation', ?, ?)
         `, [productId, stock, stock]);
+        
+        await connection.query(`
+          INSERT INTO inventory_batches (product_id, variant_id, quantity, mfg_date, expiry_date)
+          VALUES (?, NULL, ?, ?, ?)
+        `, [productId, stock, mfg_date || null, expiry_date || null]);
       }
 
       await connection.commit();
@@ -364,8 +377,11 @@ module.exports = (db) => {
       
       const [products] = await db.query(`
         SELECT p.*, 
-               (SELECT stock FROM inventory WHERE product_id = p.id AND variant_id IS NULL LIMIT 1) AS base_stock
+               i.stock AS base_stock,
+               i.mfg_date AS base_mfg_date,
+               i.expiry_date AS base_expiry_date
         FROM products p
+        LEFT JOIN inventory i ON p.id = i.product_id AND i.variant_id IS NULL
         WHERE p.id = ?
       `, [id]);
 
@@ -376,7 +392,7 @@ module.exports = (db) => {
       const product = products[0];
 
       const [variants] = await db.query(`
-        SELECT v.*, i.stock 
+        SELECT v.*, i.stock, i.mfg_date, i.expiry_date 
         FROM product_variants v
         LEFT JOIN inventory i ON v.id = i.variant_id
         WHERE v.product_id = ?
@@ -403,7 +419,8 @@ module.exports = (db) => {
       const {
         name_en, name_bn, category_id, brand_id, description,
         base_price, old_price, purchase_price, base_unit, status,
-        is_featured, is_recommended, rating, variants, existing_images
+        is_featured, is_recommended, rating, variants, existing_images,
+        mfg_date, expiry_date
       } = req.body;
 
       // Handle brand
@@ -466,10 +483,10 @@ module.exports = (db) => {
               WHERE id = ?
             `, [variant.price, variant.old_price || null, variant.purchase_price || null, variant.sku || null, oldVar.id]);
             
-            // Only update stock, do not touch historical data
+            // Only update stock and dates, do not touch historical data
             await connection.query(`
-              UPDATE inventory SET stock = ? WHERE variant_id = ?
-            `, [variant.stock || 0, oldVar.id]);
+              UPDATE inventory SET stock = ?, mfg_date = ?, expiry_date = ? WHERE variant_id = ?
+            `, [variant.stock || 0, variant.mfg_date || null, variant.expiry_date || null, oldVar.id]);
             
             processedVariantIds.push(oldVar.id);
           } else {
@@ -481,9 +498,9 @@ module.exports = (db) => {
 
             const stockVal = variant.stock || 0;
             await connection.query(`
-              INSERT INTO inventory (product_id, variant_id, stock, opening_stock)
-              VALUES (?, ?, ?, ?)
-            `, [id, varResult.insertId, stockVal, stockVal]);
+              INSERT INTO inventory (product_id, variant_id, stock, opening_stock, mfg_date, expiry_date)
+              VALUES (?, ?, ?, ?, ?, ?)
+            `, [id, varResult.insertId, stockVal, stockVal, variant.mfg_date || null, variant.expiry_date || null]);
 
             if (stockVal > 0) {
               await connection.query(`
@@ -506,13 +523,13 @@ module.exports = (db) => {
       const baseStock = req.body.stock || 0;
       if (oldInventories.length > 0) {
         await connection.query(`
-          UPDATE inventory SET stock = ? WHERE id = ?
-        `, [baseStock, oldInventories[0].id]);
+          UPDATE inventory SET stock = ?, mfg_date = ?, expiry_date = ? WHERE id = ?
+        `, [baseStock, mfg_date || null, expiry_date || null, oldInventories[0].id]);
       } else {
         await connection.query(`
-          INSERT INTO inventory (product_id, variant_id, stock, opening_stock)
-          VALUES (?, NULL, ?, ?)
-        `, [id, baseStock, baseStock]);
+          INSERT INTO inventory (product_id, variant_id, stock, opening_stock, mfg_date, expiry_date)
+          VALUES (?, NULL, ?, ?, ?, ?)
+        `, [id, baseStock, baseStock, mfg_date || null, expiry_date || null]);
         
         if (baseStock > 0) {
           await connection.query(`
@@ -622,6 +639,24 @@ module.exports = (db) => {
           const is_featured = (row['Featured'] || row.is_featured)?.toString().toLowerCase() === 'true' ? 1 : 0;
           const is_recommended = (row['Recommended'] || row.is_recommended)?.toString().toLowerCase() === 'true' ? 1 : 0;
           const rating = parseFloat(row['Rating'] || row.rating || 0.0);
+          
+          let mfg_date = row['MFG Date'] || row.mfg_date;
+          if (mfg_date) {
+             const parsedDate = new Date(mfg_date);
+             if (isNaN(parsedDate)) mfg_date = null;
+             else mfg_date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dhaka' }).format(parsedDate);
+          } else {
+             mfg_date = null;
+          }
+          
+          let expiry_date = row['Expiry Date'] || row.expiry_date;
+          if (expiry_date) {
+             const parsedDate = new Date(expiry_date);
+             if (isNaN(parsedDate)) expiry_date = null;
+             else expiry_date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dhaka' }).format(parsedDate);
+          } else {
+             expiry_date = null;
+          }
 
           // Check if Product already exists (either in DB or created in this batch)
           let productId = productCache.get(final_name_en);
@@ -741,15 +776,20 @@ module.exports = (db) => {
             
             // Base Inventory (Always add base inventory for new product)
             await connection.query(`
-              INSERT INTO inventory (product_id, variant_id, stock, opening_stock)
-              VALUES (?, NULL, ?, ?)
-            `, [productId, stock, stock]);
+              INSERT INTO inventory (product_id, variant_id, stock, opening_stock, mfg_date, expiry_date)
+              VALUES (?, NULL, ?, ?, ?, ?)
+            `, [productId, stock, stock, mfg_date, expiry_date]);
 
             if (stock > 0) {
               await connection.query(`
                 INSERT INTO inventory_ledger (product_id, variant_id, type, reference, quantity, balance)
                 VALUES (?, NULL, 'opening', 'CSV Import', ?, ?)
               `, [productId, stock, stock]);
+              
+              await connection.query(`
+                INSERT INTO inventory_batches (product_id, variant_id, quantity, mfg_date, expiry_date)
+                VALUES (?, NULL, ?, ?, ?)
+              `, [productId, stock, mfg_date, expiry_date]);
             }
           } else {
             if (row['Base Stock'] !== undefined && String(row['Base Stock']).trim() !== '') {
@@ -757,12 +797,12 @@ module.exports = (db) => {
               if (!isNaN(newBaseStock)) {
                 const [existingInv] = await connection.query('SELECT id FROM inventory WHERE product_id = ? AND variant_id IS NULL LIMIT 1', [productId]);
                 if (existingInv.length > 0) {
-                  await connection.query('UPDATE inventory SET stock = ? WHERE id = ?', [newBaseStock, existingInv[0].id]);
+                  await connection.query('UPDATE inventory SET stock = ?, mfg_date = COALESCE(?, mfg_date), expiry_date = COALESCE(?, expiry_date) WHERE id = ?', [newBaseStock, mfg_date, expiry_date, existingInv[0].id]);
                 } else {
                   await connection.query(`
-                    INSERT INTO inventory (product_id, variant_id, stock, opening_stock)
-                    VALUES (?, NULL, ?, ?)
-                  `, [productId, newBaseStock, newBaseStock]);
+                    INSERT INTO inventory (product_id, variant_id, stock, opening_stock, mfg_date, expiry_date)
+                    VALUES (?, NULL, ?, ?, ?, ?)
+                  `, [productId, newBaseStock, newBaseStock, mfg_date, expiry_date]);
                 }
               }
             }
@@ -785,15 +825,20 @@ module.exports = (db) => {
             // Inventory for Variant
             const vStock = parseInt(variant_stock || stock || 0);
             await connection.query(`
-              INSERT INTO inventory (product_id, variant_id, stock, opening_stock)
-              VALUES (?, ?, ?, ?)
-            `, [productId, vRes.insertId, vStock, vStock]);
+              INSERT INTO inventory (product_id, variant_id, stock, opening_stock, mfg_date, expiry_date)
+              VALUES (?, ?, ?, ?, ?, ?)
+            `, [productId, vRes.insertId, vStock, vStock, mfg_date, expiry_date]);
 
             if (vStock > 0) {
               await connection.query(`
                 INSERT INTO inventory_ledger (product_id, variant_id, type, reference, quantity, balance)
                 VALUES (?, ?, 'opening', 'CSV Import', ?, ?)
               `, [productId, vRes.insertId, vStock, vStock]);
+              
+              await connection.query(`
+                INSERT INTO inventory_batches (product_id, variant_id, quantity, mfg_date, expiry_date)
+                VALUES (?, ?, ?, ?, ?)
+              `, [productId, vRes.insertId, vStock, mfg_date, expiry_date]);
             }
           }
 

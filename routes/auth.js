@@ -118,7 +118,7 @@ module.exports = (db) => {
 
       res.json({
         token,
-        user: { id: user.id, name: user.name, email: user.email, phone: user.phone }
+        user: { id: user.id, name: user.name, email: user.email, phone: user.phone, address: user.address }
       });
     } catch (err) {
       console.error('Login error:', err);
@@ -209,7 +209,7 @@ module.exports = (db) => {
 
       res.json({
         token,
-        user: { id: user.id, name: user.name, email: user.email, phone: user.phone }
+        user: { id: user.id, name: user.name, email: user.email, phone: user.phone, address: user.address }
       });
     } catch (err) {
       console.error('Google login error:', err);

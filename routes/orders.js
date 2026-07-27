@@ -75,12 +75,50 @@ module.exports = (db) => {
         }
       }
 
+      let commissionEarned = 0;
+      if (affiliateCode) {
+        // Fetch affiliate
+        const [affRows] = await db.query('SELECT commission_rate FROM affiliates WHERE reference_code = ? AND status = "active"', [affiliateCode]);
+        if (affRows.length > 0) {
+          const defaultRate = parseFloat(affRows[0].commission_rate) || 0;
+          
+          for (const item of items) {
+             let pId = item.id;
+             if (typeof item.id === 'string' && item.id.includes('-')) {
+               pId = item.id.split('-')[0];
+             }
+             
+             // Get category commission (including parent and grand-parent fallback)
+             const [pRows] = await db.query(`
+                SELECT 
+                  COALESCE(
+                    c1.affiliate_commission, 
+                    c2.affiliate_commission, 
+                    c3.affiliate_commission
+                  ) as final_commission
+                FROM products p 
+                LEFT JOIN categories c1 ON p.category_id = c1.id 
+                LEFT JOIN categories c2 ON c1.parent_id = c2.id
+                LEFT JOIN categories c3 ON c2.parent_id = c3.id
+                WHERE p.id = ?
+             `, [pId]);
+             
+             let itemRate = defaultRate;
+             if (pRows.length > 0 && pRows[0].final_commission !== null) {
+                itemRate = parseFloat(pRows[0].final_commission);
+             }
+             
+             commissionEarned += (parseFloat(item.price) * parseInt(item.quantity)) * (itemRate / 100);
+          }
+        }
+      }
+
       // ── Order save ──
       await db.query(
         `INSERT INTO orders
           (order_id, customer_id, customer_name, phone, email, address, upazila, city,
-           items, total, payment_method, transaction_id, affiliate_code)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           items, total, payment_method, transaction_id, affiliate_code, commission_earned)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           orderId,
           customerId,
@@ -94,7 +132,8 @@ module.exports = (db) => {
           total,
           paymentMethod || 'cod',
           transactionId || null,
-          affiliateCode || null
+          affiliateCode || null,
+          commissionEarned
         ]
       );
 

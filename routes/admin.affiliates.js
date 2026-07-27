@@ -13,7 +13,7 @@ module.exports = (db) => {
       
       // Fetch ALL orders that have an affiliate code (not cancelled)
       const [allOrders] = await db.query(
-        "SELECT affiliate_code, total, created_at as order_datetime, DATE_FORMAT(created_at, '%Y-%m-%d') as order_date FROM orders WHERE affiliate_code IS NOT NULL AND status != 'cancelled'"
+        "SELECT affiliate_code, total, commission_earned, created_at as order_datetime, DATE_FORMAT(created_at, '%Y-%m-%d') as order_date FROM orders WHERE affiliate_code IS NOT NULL AND status != 'cancelled'"
       );
 
       // Fetch ALL payouts
@@ -34,9 +34,13 @@ module.exports = (db) => {
         });
       }
 
-      // Get today's date in local format (YYYY-MM-DD)
-      const now = new Date();
-      const today = new Date(now.getTime() - (now.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+      // Get today's date and order dates strictly in Bangladesh Time (BST)
+      const bstFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dhaka' });
+      const today = bstFormatter.format(new Date());
+
+      allOrders.forEach(o => {
+          o.order_date = bstFormatter.format(new Date(o.order_datetime));
+      });
 
       // Compute stats for each affiliate
       const enhancedAffiliates = affiliates.map(aff => {
@@ -48,12 +52,12 @@ module.exports = (db) => {
 
         const todaysSalesCount = todayOrders.length;
         const todaysSalesTotal = todayOrders.reduce((sum, o) => sum + Number(o.total), 0);
-        const todayCommission = todaysSalesTotal * (Number(aff.commission_rate) / 100);
+        const todayCommission = todayOrders.reduce((sum, o) => sum + (o.commission_earned != null ? Number(o.commission_earned) : (Number(o.total) * (Number(aff.commission_rate) / 100))), 0);
 
         // Total Sales (In Period)
         const totalSalesCount = affiliateOrders.length;
         const totalSalesTotal = affiliateOrders.reduce((sum, o) => sum + Number(o.total), 0);
-        const totalCommissionEarned = totalSalesTotal * (Number(aff.commission_rate) / 100);
+        const totalCommissionEarned = affiliateOrders.reduce((sum, o) => sum + (o.commission_earned != null ? Number(o.commission_earned) : (Number(o.total) * (Number(aff.commission_rate) / 100))), 0);
 
         // Paid & Due (In Period)
         const affiliatePayouts = periodPayouts.filter(p => p.affiliate_id === aff.id);
