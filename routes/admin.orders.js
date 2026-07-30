@@ -123,14 +123,28 @@ module.exports = (db) => {
       const limit = parseInt(req.query.limit) || 20;
       const offset = (page - 1) * limit;
       const status = req.query.status;
-      const { startDate, endDate } = req.query;
+      const { startDate, endDate, delivery_type } = req.query;
+
+      // Delivery-stage statuses go to their own sidebar pages
+      const deliveryStatuses = ['assigned_to_rider', 'out_for_delivery', 'delivered', 'returned'];
 
       let whereClauses = [];
       let params = [];
 
       if (status) {
+        // When filtering by a specific status, show them
         whereClauses.push('status = ?');
         params.push(status);
+      } else if (!delivery_type) {
+        // By default, hide delivery-stage orders from main orders page
+        // But if delivery_type is provided, it means we are in the delivery sidebar, so don't hide them
+        whereClauses.push(`status NOT IN (${deliveryStatuses.map(() => '?').join(',')})`);
+        params.push(...deliveryStatuses);
+      }
+
+      if (delivery_type) {
+        whereClauses.push('delivery_type = ?');
+        params.push(delivery_type);
       }
 
       if (startDate && endDate) {
@@ -138,7 +152,7 @@ module.exports = (db) => {
         params.push(startDate, endDate);
       }
 
-      let whereStr = whereClauses.length > 0 ? ' WHERE ' + whereClauses.join(' AND ') : '';
+      let whereStr = ' WHERE ' + whereClauses.join(' AND ');
 
       let query = `SELECT * FROM orders${whereStr} ORDER BY created_at DESC LIMIT ? OFFSET ?`;
       let countQuery = `SELECT COUNT(*) as total FROM orders${whereStr}`;
@@ -149,13 +163,18 @@ module.exports = (db) => {
       const total = countResult[0].total;
 
       // Fetch status counts for the selected timeframe
-      let countsWhere = '';
+      let countsWhereClauses = [];
       let countsParams = [];
       if (startDate && endDate) {
-        countsWhere = ' WHERE created_at BETWEEN ? AND ?';
-        countsParams = [startDate, endDate];
+        countsWhereClauses.push('created_at BETWEEN ? AND ?');
+        countsParams.push(startDate, endDate);
+      }
+      if (delivery_type) {
+        countsWhereClauses.push('delivery_type = ?');
+        countsParams.push(delivery_type);
       }
       
+      let countsWhere = countsWhereClauses.length > 0 ? ' WHERE ' + countsWhereClauses.join(' AND ') : '';
       const [statusCounts] = await db.query(`
         SELECT 
           COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) as pending,
@@ -219,6 +238,60 @@ module.exports = (db) => {
     } catch (err) {
       console.error('Fetch order detail error:', err);
       res.status(500).json({ message: 'Server error fetching order' });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PUT /api/admin/orders/:id/send-to-manual
+  // Move order to manual delivery queue
+  // ─────────────────────────────────────────────────────────────────────────
+  router.put('/:id/send-to-manual', async (req, res) => {
+    const { id } = req.params;
+    try {
+      const isNumeric = !isNaN(id);
+      const column = isNumeric ? 'id' : 'order_id';
+
+      const [result] = await db.query(
+        `UPDATE orders SET delivery_type = 'manual' WHERE ${column} = ?`,
+        [id]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ message: 'Order not found' });
+      }
+
+      res.json({ message: 'Order moved to manual delivery successfully' });
+    } catch (err) {
+      console.error('Send to manual error:', err);
+      res.status(500).json({ message: 'Server error moving to manual delivery' });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PUT /api/admin/orders/:id/assign-rider
+  // Assign a rider to the order
+  // ─────────────────────────────────────────────────────────────────────────
+  router.put('/:id/assign-rider', async (req, res) => {
+    const { id } = req.params;
+    const { rider_id } = req.body;
+    try {
+      const isNumeric = !isNaN(id);
+      const column = isNumeric ? 'id' : 'order_id';
+
+      // Mark order as Assigned to Rider
+      const [result] = await db.query(
+        `UPDATE orders SET rider_id = ?, status = 'assigned_to_rider', delivery_type = 'manual' WHERE ${column} = ?`,
+        [rider_id, id]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ message: 'Order not found' });
+      }
+
+      res.json({ message: 'Rider assigned successfully' });
+    } catch (err) {
+      console.error('Assign rider error:', err);
+      res.status(500).json({ message: 'Server error assigning rider' });
     }
   });
 

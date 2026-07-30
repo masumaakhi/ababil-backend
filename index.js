@@ -58,6 +58,8 @@ const adminCustomerRoutes = require('./routes/admin.customers');
 const adminProductRoutes = require('./routes/admin.products');
 const adminBrandRoutes = require('./routes/admin.brands');
 const adminCompanyRoutes = require('./routes/admin.companies');
+const adminRidersRoutes = require('./routes/admin.riders');
+const riderRoutes = require('./routes/rider');
 const adminOrderRoutes = require('./routes/admin.orders');
 const adminAffiliateRoutes = require('./routes/admin.affiliates');
 const adminManagementRoutes = require('./routes/admin.management');
@@ -82,6 +84,7 @@ app.use('/api/orders',     orderRoutes(db));
 app.use('/api/banners',    bannerRoutes(db));
 app.use('/api/flash-sale', flashSaleRoutes(db));
 app.use('/api/settings',   settingsRoutes(db));
+app.use('/api/rider',      riderRoutes(db));
 
 app.use('/api/admin/auth', adminAuthRoutes(db));
 
@@ -96,6 +99,7 @@ app.use('/api/admin/orders', adminOrderRoutes(db));
 app.use('/api/admin/affiliates', adminAffiliateRoutes(db));
 app.use('/api/admin/management', adminManagementRoutes(db));
 app.use('/api/admin/roles', adminRolesRoutes(db));
+app.use('/api/admin/riders', adminRidersRoutes(db));
 app.use('/api/admin/banners', adminBannerRoutes(db));
 app.use('/api/admin/flash-sale', adminFlashSaleRoutes(db));
 app.use('/api/admin/dashboard', adminDashboardRoutes(db));

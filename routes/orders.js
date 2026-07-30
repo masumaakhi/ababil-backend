@@ -277,7 +277,10 @@ module.exports = (db) => {
 
     try {
       const [rows] = await db.query(
-        'SELECT * FROM orders WHERE order_id = ?',
+        `SELECT o.*, r.name AS rider_name, r.phone AS rider_phone
+         FROM orders o
+         LEFT JOIN riders r ON o.rider_id = r.id
+         WHERE o.order_id = ?`,
         [orderId]
       );
 
