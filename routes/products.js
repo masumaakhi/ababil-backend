@@ -33,7 +33,7 @@ module.exports = (db) => {
       res.json(rootCategories);
     } catch (err) {
       console.error(err);
-      res.status(500).json({ message: 'Server error' });
+      res.status(500).json({ message: 'Server error', error: err.message });
     }
   });
 
@@ -98,7 +98,7 @@ module.exports = (db) => {
       res.json(sections);
     } catch (err) {
       console.error(err);
-      res.status(500).json({ message: 'Server error' });
+      res.status(500).json({ message: 'Server error', error: err.message });
     }
   });
 
@@ -165,7 +165,7 @@ module.exports = (db) => {
       res.json(parsedProducts);
     } catch (err) {
       console.error(err);
-      res.status(500).json({ message: 'Server error' });
+      res.status(500).json({ message: 'Server error', error: err.message });
     }
   });
 
@@ -212,7 +212,7 @@ module.exports = (db) => {
       res.json(product);
     } catch (err) {
       console.error(err);
-      res.status(500).json({ message: 'Server error' });
+      res.status(500).json({ message: 'Server error', error: err.message });
     }
   });
 
