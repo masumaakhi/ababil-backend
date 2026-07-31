@@ -55,14 +55,23 @@ module.exports = (db) => {
         const todayCommission = todayOrders.reduce((sum, o) => sum + (o.commission_earned != null ? Number(o.commission_earned) : (Number(o.total) * (Number(aff.commission_rate) / 100))), 0);
 
         // Total Sales (In Period)
-        const totalSalesCount = affiliateOrders.length;
-        const totalSalesTotal = affiliateOrders.reduce((sum, o) => sum + Number(o.total), 0);
-        const totalCommissionEarned = affiliateOrders.reduce((sum, o) => sum + (o.commission_earned != null ? Number(o.commission_earned) : (Number(o.total) * (Number(aff.commission_rate) / 100))), 0);
+        const periodSalesCount = affiliateOrders.length;
+        const periodSalesTotal = affiliateOrders.reduce((sum, o) => sum + Number(o.total), 0);
+        const periodCommissionEarned = affiliateOrders.reduce((sum, o) => sum + (o.commission_earned != null ? Number(o.commission_earned) : (Number(o.total) * (Number(aff.commission_rate) / 100))), 0);
 
         // Paid & Due (In Period)
         const affiliatePayouts = periodPayouts.filter(p => p.affiliate_id === aff.id);
-        const paidEarnings = affiliatePayouts.reduce((sum, p) => sum + Number(p.amount), 0);
-        const unpaidEarnings = totalCommissionEarned - paidEarnings;
+        const periodPaidEarnings = affiliatePayouts.reduce((sum, p) => sum + Number(p.amount), 0);
+        const periodUnpaidEarnings = periodCommissionEarned - periodPaidEarnings;
+
+        // Lifetime Stats
+        const lifetimeSalesCount = lifetimeAffiliateOrders.length;
+        const lifetimeSalesTotal = lifetimeAffiliateOrders.reduce((sum, o) => sum + Number(o.total), 0);
+        const lifetimeCommissionEarned = lifetimeAffiliateOrders.reduce((sum, o) => sum + (o.commission_earned != null ? Number(o.commission_earned) : (Number(o.total) * (Number(aff.commission_rate) / 100))), 0);
+        
+        const lifetimeAffiliatePayouts = allPayouts.filter(p => p.affiliate_id === aff.id);
+        const lifetimePaidEarnings = lifetimeAffiliatePayouts.reduce((sum, p) => sum + Number(p.amount), 0);
+        const lifetimeUnpaidEarnings = lifetimeCommissionEarned - lifetimePaidEarnings;
 
         // Last Sale Date (Lifetime)
         let lastSale = null;
@@ -78,12 +87,23 @@ module.exports = (db) => {
           stats: {
             todayCount: todaysSalesCount,
             todayTotal: todaysSalesTotal,
-            totalCount: totalSalesCount,
-            totalTotal: totalSalesTotal,
+            periodCount: periodSalesCount,
+            periodTotal: periodSalesTotal,
+            periodCommission: periodCommissionEarned,
+            periodPaidEarnings: periodPaidEarnings,
+            periodUnpaidEarnings: periodUnpaidEarnings,
+            lifetimeCount: lifetimeSalesCount,
+            lifetimeTotal: lifetimeSalesTotal,
+            lifetimeCommission: lifetimeCommissionEarned,
+            lifetimePaidEarnings: lifetimePaidEarnings,
+            lifetimeUnpaidEarnings: lifetimeUnpaidEarnings,
+            // Keep old properties for backward compatibility
             todayCommission: todayCommission,
-            totalCommission: totalCommissionEarned,
-            paidEarnings: paidEarnings,
-            unpaidEarnings: unpaidEarnings
+            totalCount: periodSalesCount,
+            totalTotal: periodSalesTotal,
+            totalCommission: periodCommissionEarned,
+            paidEarnings: periodPaidEarnings,
+            unpaidEarnings: periodUnpaidEarnings
           }
         };
       });

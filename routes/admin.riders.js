@@ -2,6 +2,59 @@ const express = require('express');
 
 module.exports = (db) => {
     const router = express.Router();
+    // GET riders stats
+    router.get('/stats', async (req, res) => {
+        try {
+            const { startDate, endDate } = req.query;
+            let dateFilter = '';
+            let params = [];
+
+            if (startDate && endDate) {
+                dateFilter = ' AND created_at BETWEEN ? AND ?';
+                params.push(startDate, endDate);
+            }
+
+            const [riders] = await db.query('SELECT SUM(cash_in_hand) as total_cash_on_hand, COUNT(id) as total_rider FROM riders');
+            
+            // Total delivery charge, success on delivery, return product
+            // Assuming we look at `orders` table where status='delivered' or 'returned' and rider_id IS NOT NULL
+            let orderQuery = 'SELECT status, SUM(delivery_charge) as total_delivery_charge, COUNT(id) as total_count FROM orders WHERE rider_id IS NOT NULL';
+            if (dateFilter) {
+                orderQuery += dateFilter;
+            }
+            orderQuery += ' GROUP BY status';
+
+            const [orderStats] = await db.query(orderQuery, params);
+
+            let successOnDelivery = 0;
+            let returnProduct = 0;
+            let totalDeliveryCharge = 0;
+
+            orderStats.forEach(stat => {
+                if (stat.status === 'delivered') {
+                    successOnDelivery += stat.total_count;
+                    totalDeliveryCharge += parseFloat(stat.total_delivery_charge) || 0;
+                } else if (stat.status === 'returned' || stat.status === 'returned_to_seller') {
+                    returnProduct += stat.total_count;
+                    // Delivery charge might be counted or not for returns, usually only delivered.
+                    // But if it's there we can add it, or assume only delivered gives delivery charge.
+                    // Let's add it to total delivery charge if we want to show all delivery charges collected or incurred.
+                    // Actually, delivery charge is usually collected on success. Let's stick to what's collected on delivered.
+                }
+            });
+
+            res.json({
+                totalCashOnHand: parseFloat(riders[0].total_cash_on_hand) || 0,
+                totalRider: riders[0].total_rider || 0,
+                totalDeliveryCharge: totalDeliveryCharge,
+                successOnDelivery: successOnDelivery,
+                returnProduct: returnProduct
+            });
+        } catch (error) {
+            console.error(error);
+            res.status(500).json({ message: 'Failed to fetch rider stats' });
+        }
+    });
 
     // GET all riders
     router.get('/', async (req, res) => {
@@ -57,6 +110,22 @@ module.exports = (db) => {
                 res.status(400).json({ message: 'Phone number already exists' });
             } else {
                 res.status(500).json({ message: 'Failed to update rider' });
+            }
+        }
+    });
+
+    // DELETE rider
+    router.delete('/:id', async (req, res) => {
+        const { id } = req.params;
+        try {
+            await db.query('DELETE FROM riders WHERE id=?', [id]);
+            res.json({ success: true });
+        } catch (error) {
+            console.error(error);
+            if (error.code === 'ER_ROW_IS_REFERENCED_2') {
+                res.status(400).json({ message: 'Cannot delete rider because they have associated orders or settlements.' });
+            } else {
+                res.status(500).json({ message: 'Failed to delete rider' });
             }
         }
     });

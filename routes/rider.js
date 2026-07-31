@@ -125,6 +125,8 @@ module.exports = (db) => {
                 // Wallet balance increases if payment model is commission
                 if (rider.payment_model === 'commission') {
                     walletUpdate = parseFloat(rider.per_parcel_rate);
+                } else if (rider.payment_model === 'delivery_charge') {
+                    walletUpdate = parseFloat(order.delivery_charge || 0);
                 }
 
                 if (cashUpdate > 0 || walletUpdate > 0) {

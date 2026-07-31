@@ -12,7 +12,7 @@ module.exports = (db) => {
     const {
       name, phone, email,
       address, upazila, city,
-      items, total,
+      items, total, deliveryCharge,
       paymentMethod, transactionId, affiliateCode
     } = req.body;
 
@@ -117,8 +117,8 @@ module.exports = (db) => {
       await db.query(
         `INSERT INTO orders
           (order_id, customer_id, customer_name, phone, email, address, upazila, city,
-           items, total, payment_method, transaction_id, affiliate_code, commission_earned)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           items, total, delivery_charge, payment_method, transaction_id, affiliate_code, commission_earned)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           orderId,
           customerId,
@@ -130,6 +130,7 @@ module.exports = (db) => {
           city || 'Dhaka',
           JSON.stringify(items),
           total,
+          deliveryCharge || 0,
           paymentMethod || 'cod',
           transactionId || null,
           affiliateCode || null,

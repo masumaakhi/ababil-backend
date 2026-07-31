@@ -46,6 +46,7 @@ module.exports = (db) => {
       const calculateStats = (ordersList) => {
         let ordersCount = 0;
         let revenue = 0;
+        let revenueWithoutDelivery = 0;
         let purchasePrice = 0;
         let profit = 0;
         let netProfit = 0;
@@ -101,6 +102,9 @@ module.exports = (db) => {
             // Calculate delivery fee for this order
             const deliveryFee = city === targetCity ? insideFee : outsideFee;
             
+            // Revenue without delivery
+            revenueWithoutDelivery += (total - deliveryFee);
+            
             // Net profit = total received - cost of products - delivery fee paid to courier
             const orderProfit = total - orderPurchasePrice - deliveryFee;
             
@@ -115,6 +119,7 @@ module.exports = (db) => {
         return {
           ordersCount,
           revenue,
+          revenueWithoutDelivery,
           purchasePrice,
           profit,
           netProfit,
@@ -143,6 +148,7 @@ module.exports = (db) => {
       let prevStats = {
         ordersCount: 0,
         revenue: 0,
+        revenueWithoutDelivery: 0,
         purchasePrice: 0,
         profit: 0,
         netProfit: 0,
@@ -266,6 +272,8 @@ module.exports = (db) => {
         yesterdayOrders: prevStats.ordersCount,
         todayRevenue: currentStats.revenue,
         yesterdayRevenue: prevStats.revenue,
+        todayRevenueWithoutDelivery: currentStats.revenueWithoutDelivery,
+        yesterdayRevenueWithoutDelivery: prevStats.revenueWithoutDelivery,
         delivered: currentStats.delivered,
         pending: currentStats.pending,
         cancelled: currentStats.cancelled,
