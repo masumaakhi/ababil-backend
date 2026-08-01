@@ -6,21 +6,29 @@ module.exports = (db) => {
     router.get('/stats', async (req, res) => {
         try {
             const { startDate, endDate } = req.query;
-            let dateFilter = '';
             let params = [];
+            let dateFilterRiders = '';
+            let dateFilterOrders = '';
+            let dateFilterSettlements = '';
 
             if (startDate && endDate) {
-                dateFilter = ' AND created_at BETWEEN ? AND ?';
+                dateFilterRiders = ' AND created_at BETWEEN ? AND ?';
+                dateFilterOrders = ' AND updated_at BETWEEN ? AND ?';
+                dateFilterSettlements = ' AND date BETWEEN ? AND ?';
                 params.push(startDate, endDate);
             }
 
-            const [riders] = await db.query('SELECT SUM(cash_in_hand) as total_cash_on_hand, COUNT(id) as total_rider FROM riders');
+            let riderQuery = 'SELECT SUM(cash_in_hand) as total_cash_on_hand, COUNT(id) as total_rider FROM riders WHERE 1=1';
+            if (dateFilterRiders) {
+                riderQuery += dateFilterRiders;
+            }
+            
+            const [riders] = await db.query(riderQuery, params);
             
             // Total delivery charge, success on delivery, return product
-            // Assuming we look at `orders` table where status='delivered' or 'returned' and rider_id IS NOT NULL
             let orderQuery = 'SELECT status, SUM(delivery_charge) as total_delivery_charge, COUNT(id) as total_count FROM orders WHERE rider_id IS NOT NULL';
-            if (dateFilter) {
-                orderQuery += dateFilter;
+            if (dateFilterOrders) {
+                orderQuery += dateFilterOrders;
             }
             orderQuery += ' GROUP BY status';
 
@@ -36,15 +44,30 @@ module.exports = (db) => {
                     totalDeliveryCharge += parseFloat(stat.total_delivery_charge) || 0;
                 } else if (stat.status === 'returned' || stat.status === 'returned_to_seller') {
                     returnProduct += stat.total_count;
-                    // Delivery charge might be counted or not for returns, usually only delivered.
-                    // But if it's there we can add it, or assume only delivered gives delivery charge.
-                    // Let's add it to total delivery charge if we want to show all delivery charges collected or incurred.
-                    // Actually, delivery charge is usually collected on success. Let's stick to what's collected on delivered.
                 }
             });
 
+            // Total collect cash (COD orders delivered)
+            let codQuery = "SELECT SUM(total) as total_cod FROM orders WHERE rider_id IS NOT NULL AND payment_method='cod' AND status='delivered'";
+            if (dateFilterOrders) {
+                codQuery += dateFilterOrders;
+            }
+            const [codStats] = await db.query(codQuery, params);
+            const totalCollectCash = parseFloat(codStats[0].total_cod) || 0;
+
+            // Total submitted cash (Settlements)
+            let settleQuery = 'SELECT SUM(collected_amount) as total_submitted FROM rider_settlements WHERE 1=1';
+            if (dateFilterSettlements) {
+                settleQuery += dateFilterSettlements;
+            }
+            const [settleStats] = await db.query(settleQuery, params);
+            const totalSubmittedCash = parseFloat(settleStats[0].total_submitted) || 0;
+
             res.json({
-                totalCashOnHand: parseFloat(riders[0].total_cash_on_hand) || 0,
+                totalCashOnHand: parseFloat(riders[0].total_cash_on_hand) || 0, // This is current lifetime cash in hand of riders
+                totalCollectCash: totalCollectCash,
+                totalSubmittedCash: totalSubmittedCash,
+                totalUnsubmittedCash: totalCollectCash - totalSubmittedCash,
                 totalRider: riders[0].total_rider || 0,
                 totalDeliveryCharge: totalDeliveryCharge,
                 successOnDelivery: successOnDelivery,
@@ -59,7 +82,62 @@ module.exports = (db) => {
     // GET all riders
     router.get('/', async (req, res) => {
         try {
+            const { startDate, endDate } = req.query;
+            let dateFilterSettlements = '';
+            let dateFilterOrders = '';
+            let params = [];
+            
+            if (startDate && endDate) {
+                // The frontend now explicitly sends the date in YYYY-MM-DD HH:mm:ss format (in BD time).
+                // Use it directly without new Date() conversion to prevent server timezone shifting.
+                dateFilterSettlements = ' AND date BETWEEN ? AND ?';
+                dateFilterOrders = ' AND updated_at BETWEEN ? AND ?';
+                params.push(startDate, endDate);
+            }
+
             const [riders] = await db.query('SELECT id, name, phone, zone, payment_model, per_parcel_rate, base_salary, cash_in_hand, wallet_balance, status, created_at FROM riders ORDER BY id DESC');
+            
+            if (startDate && endDate) {
+                for (let rider of riders) {
+                    const [orders] = await db.query(
+                        `SELECT SUM(total) as total_cod, COUNT(id) as delivered_count, SUM(delivery_charge) as total_delivery_charge 
+                         FROM orders 
+                         WHERE rider_id = ? AND payment_method='cod' AND status='delivered' ${dateFilterOrders}`,
+                        [rider.id, ...params]
+                    );
+                    
+                    const [settlements] = await db.query(
+                        `SELECT SUM(collected_amount) as submitted_cod, SUM(rider_commission_deducted) as paid_wallet 
+                         FROM rider_settlements 
+                         WHERE rider_id = ? ${dateFilterSettlements}`,
+                        [rider.id, ...params]
+                    );
+
+                    const totalCod = parseFloat(orders[0].total_cod) || 0;
+                    const submittedCod = parseFloat(settlements[0].submitted_cod) || 0;
+                    const paidWallet = parseFloat(settlements[0].paid_wallet) || 0;
+                    
+                    rider.time_filtered_stats = {
+                        total_cod: totalCod,
+                        submitted_cod: submittedCod,
+                        unsubmitted_cod: totalCod - submittedCod,
+                        total_earn: 0,
+                        paid_wallet: paidWallet
+                    };
+
+                    const deliveredCount = orders[0].delivered_count || 0;
+                    const totalDeliveryCharge = parseFloat(orders[0].total_delivery_charge) || 0;
+
+                    if (rider.payment_model === 'salary') {
+                        rider.time_filtered_stats.total_earn = parseFloat(rider.base_salary) || 0;
+                    } else if (rider.payment_model === 'commission') {
+                        rider.time_filtered_stats.total_earn = (parseFloat(rider.per_parcel_rate) || 0) * deliveredCount;
+                    } else if (rider.payment_model === 'delivery_charge') {
+                        rider.time_filtered_stats.total_earn = totalDeliveryCharge;
+                    }
+                }
+            }
+
             res.json(riders);
         } catch (error) {
             console.error(error);
