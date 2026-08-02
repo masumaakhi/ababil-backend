@@ -4,6 +4,7 @@ const dotenv     = require('dotenv');
 const mysql      = require('mysql2/promise');
 const helmet     = require('helmet');
 const morgan     = require('morgan');
+const rateLimit  = require('express-rate-limit');
 const runMigrations = require('./migrate');
 const logAdminActivity = require('./middleware/activityLogger');
 
@@ -79,7 +80,16 @@ const settingsRoutes = require('./routes/settings');
 const analyticsRoutes = require('./routes/analytics');
 const adminAnalyticsRoutes = require('./routes/admin.analytics');
 
-app.use('/api/auth',       authRoutes(db));
+// ── Rate Limiting ─────────────────────────────────────────────────────────────
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // Limit each IP to 5 login requests per window
+  message: { message: "Too many login attempts from this IP, please try again after 15 minutes." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use('/api/auth', loginLimiter, authRoutes(db));
 app.use('/api/products',   productRoutes(db));
 app.use('/api/orders',     orderRoutes(db));
 app.use('/api/banners',    bannerRoutes(db));
@@ -87,7 +97,7 @@ app.use('/api/flash-sale', flashSaleRoutes(db));
 app.use('/api/settings',   settingsRoutes(db));
 app.use('/api/rider',      riderRoutes(db));
 
-app.use('/api/admin/auth', adminAuthRoutes(db));
+app.use('/api/admin/auth', loginLimiter, adminAuthRoutes(db));
 
 // Apply activity logger to all other admin routes
 app.use('/api/admin', logAdminActivity(db));

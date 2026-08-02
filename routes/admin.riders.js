@@ -88,14 +88,17 @@ module.exports = (db) => {
             let params = [];
             
             if (startDate && endDate) {
-                // The frontend now explicitly sends the date in YYYY-MM-DD HH:mm:ss format (in BD time).
-                // Use it directly without new Date() conversion to prevent server timezone shifting.
+                // The frontend explicitly sends the ISO date range
                 dateFilterSettlements = ' AND date BETWEEN ? AND ?';
                 dateFilterOrders = ' AND updated_at BETWEEN ? AND ?';
                 params.push(startDate, endDate);
             }
 
-            const [riders] = await db.query('SELECT id, name, phone, zone, payment_model, per_parcel_rate, base_salary, cash_in_hand, wallet_balance, status, created_at FROM riders ORDER BY id DESC');
+            const [riders] = await db.query(`
+                SELECT id, name, phone, zone, payment_model, per_parcel_rate, base_salary, cash_in_hand, wallet_balance, status, created_at,
+                (SELECT COUNT(id) FROM orders WHERE rider_id = riders.id AND status='delivered') as total_delivered
+                FROM riders ORDER BY id DESC
+            `);
             
             if (startDate && endDate) {
                 for (let rider of riders) {
@@ -116,17 +119,17 @@ module.exports = (db) => {
                     const totalCod = parseFloat(orders[0].total_cod) || 0;
                     const submittedCod = parseFloat(settlements[0].submitted_cod) || 0;
                     const paidWallet = parseFloat(settlements[0].paid_wallet) || 0;
+                    const deliveredCount = orders[0].delivered_count || 0;
+                    const totalDeliveryCharge = parseFloat(orders[0].total_delivery_charge) || 0;
                     
                     rider.time_filtered_stats = {
                         total_cod: totalCod,
                         submitted_cod: submittedCod,
                         unsubmitted_cod: totalCod - submittedCod,
                         total_earn: 0,
-                        paid_wallet: paidWallet
+                        paid_wallet: paidWallet,
+                        delivered_count: deliveredCount
                     };
-
-                    const deliveredCount = orders[0].delivered_count || 0;
-                    const totalDeliveryCharge = parseFloat(orders[0].total_delivery_charge) || 0;
 
                     if (rider.payment_model === 'salary') {
                         rider.time_filtered_stats.total_earn = parseFloat(rider.base_salary) || 0;
@@ -141,7 +144,7 @@ module.exports = (db) => {
             res.json(riders);
         } catch (error) {
             console.error(error);
-            res.status(500).json({ message: 'Failed to fetch riders' });
+            res.status(500).json({ message: 'Failed to fetch riders: ' + error.message });
         }
     });
 

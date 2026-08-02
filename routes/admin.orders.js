@@ -147,6 +147,16 @@ module.exports = (db) => {
         params.push(delivery_type);
       }
 
+      if (req.query.affiliate) {
+        whereClauses.push('affiliate_code = ?');
+        params.push(req.query.affiliate);
+      }
+
+      if (req.query.rider_id) {
+        whereClauses.push('rider_id = ?');
+        params.push(req.query.rider_id);
+      }
+
       if (startDate && endDate) {
         whereClauses.push('created_at BETWEEN ? AND ?');
         params.push(startDate, endDate);
