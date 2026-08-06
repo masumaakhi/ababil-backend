@@ -372,13 +372,18 @@ module.exports = (db) => {
   // ─────────────────────────────────────────────────────────────────────────
   // PUT /api/admin/inventory/edit/:id
   // Update inventory metadata (reorder_level, warehouse, etc)
+  // Also updates the initial (opening) batch dates when mfg_date/expiry_date change
   // ─────────────────────────────────────────────────────────────────────────
   router.put('/edit/:id', async (req, res) => {
+    const connection = await db.getConnection();
     try {
+      await connection.beginTransaction();
+
       const { id } = req.params;
       const { reorder_level, min_stock, warehouse, rack_location, batch_number, expiry_date, mfg_date, notes } = req.body;
 
-      await db.query(
+      // 1. Update inventory table
+      await connection.query(
         `UPDATE inventory SET 
           reorder_level = ?, min_stock = ?, warehouse = ?, rack_location = ?, 
           batch_number = ?, expiry_date = ?, mfg_date = ?, notes = ? 
@@ -390,10 +395,56 @@ module.exports = (db) => {
         ]
       );
 
+      // 2. If dates changed, also update the initial (opening) batch for this inventory row
+      if (mfg_date !== undefined || expiry_date !== undefined) {
+        // Get the inventory row to find product_id and variant_id
+        const [invRows] = await connection.query('SELECT product_id, variant_id FROM inventory WHERE id = ?', [id]);
+        if (invRows.length > 0) {
+          const { product_id, variant_id } = invRows[0];
+
+          // Find the initial batch (oldest one = lowest id) for this product+variant combo
+          let batchQuery = 'SELECT id FROM inventory_batches WHERE product_id = ? AND variant_id ';
+          let batchParams = [product_id];
+          if (variant_id === null || variant_id === undefined) {
+            batchQuery += 'IS NULL';
+          } else {
+            batchQuery += '= ?';
+            batchParams.push(variant_id);
+          }
+          batchQuery += ' ORDER BY id ASC LIMIT 1';
+
+          const [batchRows] = await connection.query(batchQuery, batchParams);
+          if (batchRows.length > 0) {
+            const initialBatchId = batchRows[0].id;
+            // Update only the fields that were provided
+            if (mfg_date !== undefined && expiry_date !== undefined) {
+              await connection.query(
+                'UPDATE inventory_batches SET mfg_date = ?, expiry_date = ? WHERE id = ?',
+                [mfg_date || null, expiry_date || null, initialBatchId]
+              );
+            } else if (mfg_date !== undefined) {
+              await connection.query(
+                'UPDATE inventory_batches SET mfg_date = ? WHERE id = ?',
+                [mfg_date || null, initialBatchId]
+              );
+            } else if (expiry_date !== undefined) {
+              await connection.query(
+                'UPDATE inventory_batches SET expiry_date = ? WHERE id = ?',
+                [expiry_date || null, initialBatchId]
+              );
+            }
+          }
+        }
+      }
+
+      await connection.commit();
       res.json({ message: 'Inventory metadata updated successfully' });
     } catch (err) {
+      await connection.rollback();
       console.error(err);
       res.status(500).json({ message: 'Server error updating inventory metadata' });
+    } finally {
+      connection.release();
     }
   });
 

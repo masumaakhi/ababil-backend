@@ -285,6 +285,88 @@ module.exports = (db) => {
     }
   });
 
+  // ── HEATMAPS ENDPOINTS ───────────────────────────────────────────────────
+
+  router.get('/behavior/heatmaps/pages', async (req, res) => {
+    try {
+      const [pages] = await db.query(`
+        SELECT page_url, COUNT(*) as click_count
+        FROM analytics_heatmaps
+        WHERE click_x IS NOT NULL
+        GROUP BY page_url
+        ORDER BY click_count DESC
+        LIMIT 50
+      `);
+      res.json(pages);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: 'Failed to fetch heatmap pages' });
+    }
+  });
+
+  router.get('/behavior/heatmaps/data', async (req, res) => {
+    try {
+      const { url } = req.query;
+      if (!url) return res.status(400).json({ error: 'URL is required' });
+
+      const [clicks] = await db.query(`
+        SELECT click_x, click_y, viewport_width, viewport_height
+        FROM analytics_heatmaps
+        WHERE page_url = ? AND click_x IS NOT NULL
+        LIMIT 3000
+      `, [url]);
+      
+      res.json(clicks);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: 'Failed to fetch heatmap data' });
+    }
+  });
+
+  // ── SESSION RECORDINGS / TIMELINES ───────────────────────────────────────
+
+  router.get('/behavior/recordings/sessions', async (req, res) => {
+    try {
+      const [sessions] = await db.query(`
+        SELECT session_id, ip_address, device_type, country, city, entry_page, created_at, session_end,
+          TIMESTAMPDIFF(SECOND, created_at, session_end) as duration_seconds
+        FROM analytics_visitors
+        ORDER BY created_at DESC
+        LIMIT 50
+      `);
+      res.json(sessions);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: 'Failed to fetch sessions' });
+    }
+  });
+
+  router.get('/behavior/recordings/timeline/:sessionId', async (req, res) => {
+    try {
+      const { sessionId } = req.params;
+      
+      // Fetch Page Views
+      const [pageViews] = await db.query(`
+        SELECT 'page_view' as type, page_url, page_title, time_spent as data, created_at
+        FROM analytics_page_views WHERE session_id = ?
+      `, [sessionId]);
+
+      // Fetch Events
+      const [events] = await db.query(`
+        SELECT 'event' as type, event_type as title, event_data as data, created_at
+        FROM analytics_events WHERE session_id = ?
+      `, [sessionId]);
+
+      // Combine and Sort
+      const timeline = [...pageViews, ...events].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      
+      res.json(timeline);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: 'Failed to fetch timeline' });
+    }
+  });
+
   // ── CONVERSIONS GROUP ENDPOINTS ──────────────────────────────────────────
 
   router.get('/conversions/funnel', async (req, res) => {
@@ -323,16 +405,24 @@ module.exports = (db) => {
     try {
       const [products] = await db.query(`
         SELECT 
-          p.id, 
-          p.name, 
-          p.price,
-          COUNT(oi.id) as times_sold,
-          COALESCE(SUM(oi.quantity), 0) as total_quantity_sold,
-          COALESCE(SUM(oi.price * oi.quantity), 0) as total_revenue
-        FROM products p
-        LEFT JOIN order_items oi ON p.id = oi.product_id
-        GROUP BY p.id
-        ORDER BY total_quantity_sold DESC, p.id DESC
+          jt.product_id as id,
+          MAX(jt.titleEn) as name,
+          MAX(jt.price) as price,
+          COUNT(o.id) as times_sold,
+          COALESCE(SUM(jt.quantity), 0) as total_quantity_sold,
+          COALESCE(SUM(jt.price * jt.quantity), 0) as total_revenue
+        FROM orders o
+        JOIN JSON_TABLE(
+          o.items,
+          '$[*]' COLUMNS (
+            product_id VARCHAR(50) PATH '$.id',
+            titleEn VARCHAR(255) PATH '$.titleEn',
+            price DECIMAL(10,2) PATH '$.price',
+            quantity INT PATH '$.quantity'
+          )
+        ) as jt
+        GROUP BY jt.product_id
+        ORDER BY total_quantity_sold DESC
         LIMIT 20
       `);
       res.json(products);
@@ -346,14 +436,14 @@ module.exports = (db) => {
     try {
       const [customers] = await db.query(`
         SELECT 
-          u.id, 
-          u.name, 
-          u.email,
+          c.id, 
+          c.name as customer_name, 
+          c.email,
           COUNT(o.id) as total_orders,
-          COALESCE(SUM(o.total_amount), 0) as total_spent
-        FROM users u
-        JOIN orders o ON u.id = o.user_id
-        GROUP BY u.id
+          COALESCE(SUM(o.total), 0) as total_spent
+        FROM customers c
+        JOIN orders o ON c.id = o.customer_id
+        GROUP BY c.id
         ORDER BY total_spent DESC
         LIMIT 20
       `);

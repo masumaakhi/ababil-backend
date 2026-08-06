@@ -17,16 +17,26 @@ process.env.TZ = 'Asia/Dhaka';
 
 const app  = express();
 const PORT = process.env.PORT || 5250;
+const isProduction = process.env.NODE_ENV === 'production';
 
 // ── Middleware ──────────────────────────────────────────────────────────────
 const allowedOrigins = [
   process.env.FRONTEND_URL || 'http://localhost:3000',
-  process.env.ADMIN_URL || 'http://localhost:3001'
-];
+  process.env.ADMIN_URL || 'http://localhost:3001',
+  'https://ababil-shop.com',
+  'https://admin.ababil-shop.com',
+  ...(process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',').map(origin => origin.trim()).filter(Boolean) : [])
+].filter(Boolean);
 
 app.use(cors({
   origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app') || origin.startsWith('http://localhost') || origin.startsWith('http://192.168.') || origin.startsWith('http://127.0.0.1')) {
+    const isLocalDevOrigin = origin && !isProduction && (
+      origin.startsWith('http://localhost') ||
+      origin.startsWith('http://192.168.') ||
+      origin.startsWith('http://127.0.0.1')
+    );
+
+    if (!origin || allowedOrigins.includes(origin) || isLocalDevOrigin) {
       callback(null, true);
     } else {
       console.error('CORS blocked origin:', origin);
@@ -44,7 +54,19 @@ app.use(express.urlencoded({ extended: true }));
 // ── MySQL Connection Pool ───────────────────────────────────────────────────
 let db;
 try {
-  db = mysql.createPool(process.env.DATABASE_URL + '?ssl={"rejectUnauthorized":false}&timezone=Z');
+  if (!process.env.DATABASE_URL) {
+    throw new Error('DATABASE_URL is required');
+  }
+
+  const dbUrl = new URL(process.env.DATABASE_URL);
+  dbUrl.searchParams.set('timezone', 'Z');
+  dbUrl.searchParams.set('ssl', JSON.stringify({
+    rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED
+      ? process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false'
+      : isProduction
+  }));
+
+  db = mysql.createPool(dbUrl.toString());
   console.log('✅ MySQL connection pool initialized (Railway).');
 } catch (error) {
   console.error('❌ Failed to initialize MySQL pool:', error.message);
@@ -135,6 +157,7 @@ app.get('/', (req, res) => {
 });
 
 // ── Debug Pool ────────────────────────────────────────────────────────────
+if (!isProduction) {
 app.get('/api/debug-pool', (req, res) => {
   if (!db) return res.send('No db');
   res.json({
@@ -143,6 +166,7 @@ app.get('/api/debug-pool', (req, res) => {
     queue: db.pool._connectionQueue.length
   });
 });
+}
 
 // ── Health Check ────────────────────────────────────────────────────────────
 app.get('/api/health', async (req, res) => {

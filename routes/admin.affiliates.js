@@ -1,7 +1,9 @@
 const express = require('express');
 const router  = express.Router();
+const { verifyAdmin } = require('../middleware/auth');
 
 module.exports = (db) => {
+  router.use(verifyAdmin);
 
   // GET /api/admin/affiliates - Get all affiliates with their computed stats
   router.get('/', async (req, res) => {

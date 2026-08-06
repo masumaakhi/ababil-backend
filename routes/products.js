@@ -109,7 +109,8 @@ module.exports = (db) => {
   // ─────────────────────────────────────────────────────────────────────────
   router.get('/', cache('products-list', 600), async (req, res) => {
     try {
-      const { is_featured, is_recommended, category_id, limit = 20 } = req.query;
+      const { is_featured, is_recommended, category_id } = req.query;
+      const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), 50);
       
       let query = `
         SELECT p.*, c.name_en as category_name, b.name as brand_name,
@@ -152,7 +153,7 @@ module.exports = (db) => {
       }
 
       query += ' ORDER BY p.created_at DESC LIMIT ?';
-      params.push(parseInt(limit));
+      params.push(limit);
 
       const [products] = await db.query(query, params);
       

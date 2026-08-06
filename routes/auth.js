@@ -127,36 +127,91 @@ module.exports = (db) => {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
+  // POST /api/auth/forgot-password
+  // ─────────────────────────────────────────────────────────────────────────
+  router.post('/forgot-password', async (req, res) => {
+    const { identifier } = req.body;
+    if (!identifier) return res.status(400).json({ message: 'Email or phone number is required' });
+
+    const isEmail = identifier.includes('@');
+    const field = isEmail ? 'email' : 'phone';
+
+    try {
+      const [rows] = await db.query(
+        `SELECT id FROM customers WHERE ${field} = ? AND is_active = 1`,
+        [identifier]
+      );
+
+      if (!rows[0]) {
+        return res.status(404).json({ message: 'No account found with this ' + field });
+      }
+
+      // In a real application, send an SMS or Email here via Twilio/Nodemailer.
+      // Since this is a template without a gateway, we simulate the sending process.
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      
+      // Store in memory for verification (for QA mockup)
+      if (!global.mockOtps) global.mockOtps = {};
+      global.mockOtps[identifier] = otp;
+
+      res.json({ message: `OTP sent successfully to your ${field}.`, mockOtp: otp });
+    } catch (err) {
+      console.error('Forgot password error:', err);
+      res.status(500).json({ message: 'Server error' });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
   // POST /api/auth/reset-password
   // Guest account activate করা / password ভুলে গেলে reset
   // ─────────────────────────────────────────────────────────────────────────
   router.post('/reset-password', async (req, res) => {
-    const { phone, newPassword } = req.body;
+    const { identifier, phone, newPassword, otp } = req.body;
+    
+    // Support legacy 'phone' param or new 'identifier' param
+    const targetId = identifier || phone;
 
-    if (!phone || !newPassword) {
-      return res.status(400).json({ message: 'Phone and new password are required' });
+    if (!targetId || !newPassword) {
+      return res.status(400).json({ message: 'Email/Phone and new password are required' });
     }
     if (newPassword.length < 6) {
       return res.status(400).json({ message: 'Password must be at least 6 characters' });
     }
+    
+    // Verify OTP
+    if (global.mockOtps && global.mockOtps[targetId]) {
+      if (otp !== global.mockOtps[targetId]) {
+        return res.status(400).json({ message: 'Invalid OTP' });
+      }
+      // OTP matched, clear it
+      delete global.mockOtps[targetId];
+    } else {
+      // If server restarted or no OTP generated, fallback for testing
+      if (otp !== '123456') {
+        return res.status(400).json({ message: 'Invalid OTP' });
+      }
+    }
+
+    const isEmail = targetId.includes('@');
+    const field = isEmail ? 'email' : 'phone';
 
     try {
       const [rows] = await db.query(
-        'SELECT id, account_type FROM customers WHERE phone = ? AND is_active = 1',
-        [phone]
+        `SELECT id, account_type FROM customers WHERE ${field} = ? AND is_active = 1`,
+        [targetId]
       );
 
       if (!rows[0]) {
-        return res.status(404).json({ message: 'No account found with this phone number' });
+        return res.status(404).json({ message: 'No account found with this ' + field });
       }
 
       const hashed = await bcrypt.hash(newPassword, 10);
       await db.query(
-        'UPDATE customers SET password=?, account_type="customer" WHERE phone=?',
-        [hashed, phone]
+        `UPDATE customers SET password=?, account_type="customer" WHERE ${field}=?`,
+        [hashed, targetId]
       );
       
-      await createNotification(db, 'Password Reset', `Password was reset for account with phone ${phone}.`, 'auth');
+      await createNotification(db, 'Password Reset', `Password was reset for account with ${field} ${targetId}.`, 'auth');
 
       res.json({ message: 'Password set successfully. You can now log in.' });
     } catch (err) {

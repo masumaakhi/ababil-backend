@@ -1,7 +1,11 @@
 const express = require('express');
+const bcrypt = require('bcrypt');
+const { verifyAdmin } = require('../middleware/auth');
 
 module.exports = (db) => {
     const router = express.Router();
+    router.use(verifyAdmin);
+
     // GET riders stats
     router.get('/stats', async (req, res) => {
         try {
@@ -101,26 +105,34 @@ module.exports = (db) => {
             `);
             
             if (startDate && endDate) {
-                for (let rider of riders) {
-                    const [orders] = await db.query(
-                        `SELECT SUM(total) as total_cod, COUNT(id) as delivered_count, SUM(delivery_charge) as total_delivery_charge 
-                         FROM orders 
-                         WHERE rider_id = ? AND payment_method='cod' AND status='delivered' ${dateFilterOrders}`,
-                        [rider.id, ...params]
-                    );
-                    
-                    const [settlements] = await db.query(
-                        `SELECT SUM(collected_amount) as submitted_cod, SUM(rider_commission_deducted) as paid_wallet 
-                         FROM rider_settlements 
-                         WHERE rider_id = ? ${dateFilterSettlements}`,
-                        [rider.id, ...params]
-                    );
+                const [orderStats] = await db.query(
+                    `SELECT rider_id, SUM(total) as total_cod, COUNT(id) as delivered_count, SUM(delivery_charge) as total_delivery_charge
+                     FROM orders
+                     WHERE rider_id IS NOT NULL AND payment_method='cod' AND status='delivered' ${dateFilterOrders}
+                     GROUP BY rider_id`,
+                    params
+                );
 
-                    const totalCod = parseFloat(orders[0].total_cod) || 0;
-                    const submittedCod = parseFloat(settlements[0].submitted_cod) || 0;
-                    const paidWallet = parseFloat(settlements[0].paid_wallet) || 0;
-                    const deliveredCount = orders[0].delivered_count || 0;
-                    const totalDeliveryCharge = parseFloat(orders[0].total_delivery_charge) || 0;
+                const [settlementStats] = await db.query(
+                    `SELECT rider_id, SUM(collected_amount) as submitted_cod, SUM(rider_commission_deducted) as paid_wallet
+                     FROM rider_settlements
+                     WHERE 1=1 ${dateFilterSettlements}
+                     GROUP BY rider_id`,
+                    params
+                );
+
+                const orderStatsByRider = new Map(orderStats.map(row => [String(row.rider_id), row]));
+                const settlementStatsByRider = new Map(settlementStats.map(row => [String(row.rider_id), row]));
+
+                for (let rider of riders) {
+                    const orders = orderStatsByRider.get(String(rider.id)) || {};
+                    const settlements = settlementStatsByRider.get(String(rider.id)) || {};
+
+                    const totalCod = parseFloat(orders.total_cod) || 0;
+                    const submittedCod = parseFloat(settlements.submitted_cod) || 0;
+                    const paidWallet = parseFloat(settlements.paid_wallet) || 0;
+                    const deliveredCount = orders.delivered_count || 0;
+                    const totalDeliveryCharge = parseFloat(orders.total_delivery_charge) || 0;
                     
                     rider.time_filtered_stats = {
                         total_cod: totalCod,
@@ -151,10 +163,15 @@ module.exports = (db) => {
     // POST new rider
     router.post('/', async (req, res) => {
         const { name, phone, password, zone, payment_model, per_parcel_rate, base_salary, status } = req.body;
+        if (!name || !phone || !password) {
+            return res.status(400).json({ message: 'Name, phone, and password are required' });
+        }
+
         try {
+            const hashedPassword = await bcrypt.hash(password, 10);
             const [result] = await db.query(
                 'INSERT INTO riders (name, phone, password, zone, payment_model, per_parcel_rate, base_salary, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                [name, phone, password, zone, payment_model, per_parcel_rate, base_salary || 0, status || 'active']
+                [name, phone, hashedPassword, zone, payment_model, per_parcel_rate, base_salary || 0, status || 'active']
             );
             res.json({ success: true, id: result.insertId });
         } catch (error) {
@@ -176,8 +193,9 @@ module.exports = (db) => {
             let params = [name, phone, zone, payment_model, per_parcel_rate, base_salary || 0, status];
             
             if (password) {
+                const hashedPassword = await bcrypt.hash(password, 10);
                 query += ', password=?';
-                params.push(password);
+                params.push(hashedPassword);
             }
             
             query += ' WHERE id=?';

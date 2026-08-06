@@ -1,8 +1,16 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
 
 module.exports = (db) => {
     const router = express.Router();
+
+    const getJwtSecret = () => {
+        if (!process.env.JWT_SECRET) {
+            throw new Error('JWT_SECRET is required');
+        }
+        return process.env.JWT_SECRET;
+    };
 
     // 1. Rider Login
     router.post('/login', async (req, res) => {
@@ -14,9 +22,19 @@ module.exports = (db) => {
             }
 
             const rider = riders[0];
-            // Simple password check since we didn't hash it initially (can be upgraded later)
-            if (rider.password !== password) {
+            const storedPassword = rider.password || '';
+            const isHashedPassword = storedPassword.startsWith('$2a$') || storedPassword.startsWith('$2b$') || storedPassword.startsWith('$2y$');
+            const isPasswordValid = isHashedPassword
+                ? await bcrypt.compare(password, storedPassword)
+                : storedPassword === password;
+
+            if (!isPasswordValid) {
                 return res.status(401).json({ message: 'Invalid phone or password' });
+            }
+
+            if (!isHashedPassword) {
+                const hashedPassword = await bcrypt.hash(password, 10);
+                await db.query('UPDATE riders SET password = ? WHERE id = ?', [hashedPassword, rider.id]);
             }
 
             if (rider.status !== 'active') {
@@ -26,7 +44,7 @@ module.exports = (db) => {
             // Generate JWT
             const token = jwt.sign(
                 { id: rider.id, phone: rider.phone, name: rider.name },
-                process.env.JWT_SECRET || 'secret',
+                getJwtSecret(),
                 { expiresIn: '7d' }
             );
 
@@ -55,7 +73,7 @@ module.exports = (db) => {
         if (!token) return res.status(401).json({ message: 'Unauthorized' });
 
         try {
-            const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
+            const decoded = jwt.verify(token, getJwtSecret());
             req.rider = decoded;
             next();
         } catch (error) {

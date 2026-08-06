@@ -1,7 +1,10 @@
 const express = require('express');
 const router = express.Router();
+const { verifyAdmin } = require('../middleware/auth');
 
 module.exports = (db) => {
+  router.use(verifyAdmin);
+
   // GET /api/admin/settings - Get all settings as a flat object
   router.get('/', async (req, res) => {
     try {

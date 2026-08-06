@@ -9,6 +9,43 @@ const redisClient = require('../config/redis');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: Parse dates in multiple formats (DD.MM.YYYY, MM/DD/YYYY, YYYY-MM-DD)
+// ─────────────────────────────────────────────────────────────────────────────
+function parseFlexibleDate(raw) {
+  if (!raw || !raw.trim()) return null;
+  const str = raw.trim();
+
+  // DD.MM.YYYY  (e.g. 10.10.2026)
+  const dotMatch = str.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (dotMatch) {
+    const d = new Date(`${dotMatch[3]}-${dotMatch[2].padStart(2,'0')}-${dotMatch[1].padStart(2,'0')}T00:00:00`);
+    if (!isNaN(d)) return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dhaka' }).format(d);
+  }
+
+  // DD/MM/YYYY  (e.g. 10/10/2026) — check if first part > 12 (unambiguous day)
+  const slashMatch = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (slashMatch) {
+    const first = parseInt(slashMatch[1]);
+    const second = parseInt(slashMatch[2]);
+    let d;
+    if (first > 12) {
+      // Must be DD/MM/YYYY
+      d = new Date(`${slashMatch[3]}-${slashMatch[2].padStart(2,'0')}-${slashMatch[1].padStart(2,'0')}T00:00:00`);
+    } else {
+      // Treat as MM/DD/YYYY (US format, common in Excel)
+      d = new Date(`${slashMatch[3]}-${slashMatch[1].padStart(2,'0')}-${slashMatch[2].padStart(2,'0')}T00:00:00`);
+    }
+    if (!isNaN(d)) return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dhaka' }).format(d);
+  }
+
+  // YYYY-MM-DD or any standard ISO
+  const d = new Date(str);
+  if (!isNaN(d)) return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dhaka' }).format(d);
+
+  return null;
+}
+
 module.exports = (db) => {
   // All routes below require admin auth
   router.use(verifyAdmin);
@@ -616,10 +653,13 @@ module.exports = (db) => {
       for (const row of results) {
         try {
           const name_en = row['Product Name (English)'] || row.name_en || row['Product Name'];
-          if (!name_en || name_en.trim() === '') {
-            throw new Error("Product Name is required");
+          
+          // Skip comment/header rows (lines starting with # used in template for scenario descriptions)
+          if (!name_en || name_en.trim() === '' || name_en.trim().startsWith('#')) {
+            continue; // silently skip, don't count as error
           }
           const final_name_en = name_en.trim();
+
 
           const name_bn = row['Product Name (Bengali)'] || row.name_bn;
           const category_path = row['Category'] || row.category_path;
@@ -648,41 +688,13 @@ module.exports = (db) => {
           const is_recommended = (row['Recommended'] || row.is_recommended)?.toString().toLowerCase() === 'true' ? 1 : 0;
           const rating = parseFloat(row['Rating'] || row.rating || 0.0);
           
-          let mfg_date = row['MFG Date'] || row.mfg_date;
-          if (mfg_date) {
-             const parsedDate = new Date(mfg_date);
-             if (isNaN(parsedDate)) mfg_date = null;
-             else mfg_date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dhaka' }).format(parsedDate);
-          } else {
-             mfg_date = null;
-          }
-          
-          let expiry_date = row['Expiry Date'] || row.expiry_date;
-          if (expiry_date) {
-             const parsedDate = new Date(expiry_date);
-             if (isNaN(parsedDate)) expiry_date = null;
-             else expiry_date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dhaka' }).format(parsedDate);
-          } else {
-             expiry_date = null;
-          }
+          const mfg_date = parseFlexibleDate(row['MFG Date'] || row.mfg_date);
+          const expiry_date = parseFlexibleDate(row['Expiry Date'] || row.expiry_date);
 
-          let variant_mfg_date = row['Variant MFG Date'] || row.variant_mfg_date || mfg_date;
-          if (variant_mfg_date) {
-             const parsedDate = new Date(variant_mfg_date);
-             if (isNaN(parsedDate)) variant_mfg_date = null;
-             else variant_mfg_date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dhaka' }).format(parsedDate);
-          } else {
-             variant_mfg_date = null;
-          }
+          // Variant dates: use their own columns if provided, otherwise fall back to base dates
+          const variant_mfg_date = parseFlexibleDate(row['Variant MFG Date'] || row.variant_mfg_date) || mfg_date;
+          const variant_expiry_date = parseFlexibleDate(row['Variant Expiry Date'] || row.variant_expiry_date) || expiry_date;
 
-          let variant_expiry_date = row['Variant Expiry Date'] || row.variant_expiry_date || expiry_date;
-          if (variant_expiry_date) {
-             const parsedDate = new Date(variant_expiry_date);
-             if (isNaN(parsedDate)) variant_expiry_date = null;
-             else variant_expiry_date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dhaka' }).format(parsedDate);
-          } else {
-             variant_expiry_date = null;
-          }
 
           // Check if Product already exists (either in DB or created in this batch)
           let productId = productCache.get(final_name_en);

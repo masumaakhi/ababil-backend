@@ -1,7 +1,9 @@
 const express = require('express');
 const router = express.Router();
+const { verifyAdmin } = require('../middleware/auth');
 
 module.exports = (db) => {
+  router.use(verifyAdmin);
 
   const refundOrderStock = async (itemsJson) => {
     let items = [];
@@ -135,6 +137,9 @@ module.exports = (db) => {
         // When filtering by a specific status, show them
         whereClauses.push('status = ?');
         params.push(status);
+      } else if (req.query.affiliate || req.query.rider_id) {
+        // If an affiliate or rider is requested, show ALL statuses for them
+        // No status filter applied.
       } else if (!delivery_type) {
         // By default, hide delivery-stage orders from main orders page
         // But if delivery_type is provided, it means we are in the delivery sidebar, so don't hide them
