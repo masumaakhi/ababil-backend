@@ -60,11 +60,12 @@ try {
 
   const dbUrl = new URL(process.env.DATABASE_URL);
   dbUrl.searchParams.set('timezone', 'Z');
-  dbUrl.searchParams.set('ssl', JSON.stringify({
-    rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED
-      ? process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false'
-      : isProduction
-  }));
+
+  // Railway/self-hosted MySQL uses self-signed SSL certificates.
+  // rejectUnauthorized must be false unless a verified CA cert is provided.
+  // Set DB_SSL_REJECT_UNAUTHORIZED=true in env only if you have a proper CA cert.
+  const rejectUnauthorized = process.env.DB_SSL_REJECT_UNAUTHORIZED === 'true';
+  dbUrl.searchParams.set('ssl', JSON.stringify({ rejectUnauthorized }));
 
   db = mysql.createPool(dbUrl.toString());
   console.log('✅ MySQL connection pool initialized (Railway).');
