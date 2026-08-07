@@ -58,17 +58,15 @@ try {
     throw new Error('DATABASE_URL is required');
   }
 
-  const dbUrl = new URL(process.env.DATABASE_URL);
-  dbUrl.searchParams.set('timezone', 'Z');
-
-  // Railway/self-hosted MySQL uses self-signed SSL certificates.
-  // rejectUnauthorized must be false unless a verified CA cert is provided.
-  // Set DB_SSL_REJECT_UNAUTHORIZED=true in env only if you have a proper CA cert.
+  const dbUrlString = process.env.DATABASE_URL;
   const rejectUnauthorized = process.env.DB_SSL_REJECT_UNAUTHORIZED === 'true';
-  dbUrl.searchParams.set('ssl', JSON.stringify({ rejectUnauthorized }));
 
-  db = mysql.createPool(dbUrl.toString());
-  console.log('✅ MySQL connection pool initialized (Railway).');
+  db = mysql.createPool({
+    uri: dbUrlString,
+    timezone: 'Z',
+    ssl: { rejectUnauthorized }
+  });
+  console.log('✅ MySQL connection pool initialized (Remote).');
 } catch (error) {
   console.error('❌ Failed to initialize MySQL pool:', error.message);
 }
@@ -192,8 +190,14 @@ app.use((req, res) => {
 
 // ── Global Error Handler ─────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
-  res.status(500).json({ message: 'Internal server error' });
+  console.error('🔥 [Backend Error]:', err.message);
+  console.error(err.stack);
+  
+  res.status(err.status || 500).json({
+    success: false,
+    message: err.message || 'Internal Server Error',
+    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined 
+  });
 });
 
 // ── Start Server ─────────────────────────────────────────────────────────────
